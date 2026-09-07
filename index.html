@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>Rami de Famille</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Figtree:wght@500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<!-- ===================== ÉCRAN 1 : ACCUEIL ===================== -->
+<section id="ecran-accueil" class="ecran ecran--centree actif">
+  <div class="carte-panneau carte-panneau--etroite">
+    <h1 class="logo">Rami <span>de Famille</span></h1>
+    <p class="sous-titre">Pour jouer ensemble, même loin les uns des autres.</p>
+
+    <label class="champ">
+      <span>Ton prénom</span>
+      <input type="text" id="input-pseudo" maxlength="20" placeholder="Ex : Mamie" autocomplete="off">
+    </label>
+
+    <button id="btn-creer" class="bouton bouton--or bouton--large">Créer une nouvelle partie</button>
+
+    <div class="separateur"><span>ou</span></div>
+
+    <label class="champ">
+      <span>Code de la partie</span>
+      <input type="text" id="input-code" maxlength="4" placeholder="Ex : F3TG" autocomplete="off" style="text-transform:uppercase">
+    </label>
+    <button id="btn-rejoindre" class="bouton bouton--contour bouton--large">Rejoindre la partie</button>
+
+    <p id="accueil-erreur" class="message-erreur"></p>
+  </div>
+</section>
+
+<!-- ===================== ÉCRAN 2 : SALON D'ATTENTE ===================== -->
+<section id="ecran-salon" class="ecran ecran--centree">
+  <div class="carte-panneau">
+    <p class="etiquette">Code de la partie — à partager</p>
+    <div class="code-partie" id="salon-code">----</div>
+    <p class="astuce">Donne ce code aux autres joueurs pour qu'ils te rejoignent.</p>
+
+    <h2 class="titre-section">Joueurs présents</h2>
+    <ul id="salon-liste-joueurs" class="liste-joueurs"></ul>
+
+    <button id="btn-lancer" class="bouton bouton--or bouton--large" hidden>Lancer la partie</button>
+    <p id="salon-attente-hote" class="astuce">En attente que l'hôte lance la partie…</p>
+    <p id="salon-erreur" class="message-erreur"></p>
+  </div>
+</section>
+
+<!-- ===================== ÉCRAN 3 : TABLE DE JEU ===================== -->
+<section id="ecran-jeu" class="ecran">
+  <header class="barre-contrat">
+    <div class="barre-contrat__contrat">
+      <span class="etiquette">Contrat <span id="jeu-niveau">1</span> / 11</span>
+      <strong id="jeu-description-contrat">—</strong>
+      <span class="etiquette" id="jeu-distributeur"></span>
+    </div>
+    <div id="jeu-indicateur-tour" class="indicateur-tour">C'est à toi de jouer</div>
+  </header>
+
+  <div class="rangee-adversaires" id="rangee-adversaires"></div>
+
+  <main class="zone-table">
+    <div class="pile-groupe">
+      <button id="btn-piocher-pioche" class="pile pile--pioche" title="Piocher une carte">
+        <span class="pile__dos"></span>
+        <span class="pile__label">Pioche<br><strong id="jeu-nb-pioche">0</strong></span>
+      </button>
+      <button id="btn-piocher-defausse" class="pile pile--defausse" title="Piocher la défausse">
+        <span id="jeu-carte-defausse" class="carte carte--vide">—</span>
+        <span class="pile__label">Défausse</span>
+      </button>
+    </div>
+
+    <div id="jeu-tapis" class="tapis" aria-label="Groupes étalés sur la table"></div>
+
+    <aside id="jeu-journal" class="journal"></aside>
+  </main>
+
+  <footer class="zone-main">
+    <div class="barre-actions">
+      <button id="btn-action-etaler" class="bouton bouton--contour">S'étaler</button>
+      <button id="btn-action-rajouter" class="bouton bouton--contour">Rajouter sur la table</button>
+      <button id="btn-action-finir-sec" class="bouton bouton--contour" title="Si toute ta main forme exactement les groupes du contrat, tu peux tout révéler d'un coup sans jamais t'être étalé (points de l'adversaire doublés).">Terminer (main cachée)</button>
+      <button id="btn-action-defausser" class="bouton bouton--or" disabled>Défausser</button>
+      <span id="jeu-aide-action" class="aide-action"></span>
+    </div>
+    <div id="barre-reordonner" class="barre-reordonner" hidden>
+      <span>Carte sélectionnée :</span>
+      <button id="btn-carte-gauche" class="bouton bouton--contour bouton--icone" title="Déplacer cette carte vers la gauche">◀</button>
+      <button id="btn-carte-droite" class="bouton bouton--contour bouton--icone" title="Déplacer cette carte vers la droite">▶</button>
+    </div>
+    <div id="jeu-main" class="main-cartes"></div>
+  </footer>
+</section>
+
+<!-- ===================== MODALE : S'ÉTALER ===================== -->
+<div id="modale-etaler" class="voile" hidden>
+  <div class="modale">
+    <h2>Composer ton étalement</h2>
+    <p class="astuce">Contrat demandé : <strong id="etaler-description"></strong>. Touche une carte de ta main puis touche le groupe où la poser.</p>
+
+    <div id="etaler-groupes" class="etaler-groupes"></div>
+
+    <h3 class="titre-section">Ta main</h3>
+    <div id="etaler-main" class="main-cartes main-cartes--modale"></div>
+
+    <div class="modale-actions">
+      <button id="btn-etaler-annuler" class="bouton bouton--contour">Annuler</button>
+      <button id="btn-etaler-valider" class="bouton bouton--or">Valider l'étalement</button>
+    </div>
+    <p id="etaler-erreur" class="message-erreur"></p>
+  </div>
+</div>
+
+<!-- ===================== MODALE : RAJOUTER ===================== -->
+<div id="modale-rajouter" class="voile" hidden>
+  <div class="modale">
+    <h2>Rajouter une carte sur la table</h2>
+    <p class="astuce">Touche une carte de ta main, puis le groupe de la table où l'ajouter.</p>
+
+    <h3 class="titre-section">Groupes sur la table</h3>
+    <div id="rajouter-tapis" class="tapis tapis--modale"></div>
+
+    <h3 class="titre-section">Ta main</h3>
+    <div id="rajouter-main" class="main-cartes main-cartes--modale"></div>
+
+    <div class="modale-actions">
+      <button id="btn-rajouter-annuler" class="bouton bouton--contour">Fermer</button>
+    </div>
+    <p id="rajouter-erreur" class="message-erreur"></p>
+  </div>
+</div>
+
+<!-- ===================== OVERLAY : RÉSULTAT DE LA MÈNE ===================== -->
+<div id="overlay-resultat-mene" class="voile voile--resultat" hidden>
+  <div class="modale modale--resultat">
+    <div class="resultat-trophee">🏆</div>
+    <h2 id="resultat-titre">—</h2>
+    <p id="resultat-detail" class="resultat-detail">—</p>
+    <h3 class="titre-section">Classement</h3>
+    <ol id="resultat-classement" class="classement"></ol>
+    <p id="resultat-prochain" class="astuce astuce--forte"></p>
+    <p class="astuce">(Touche l'écran pour continuer maintenant)</p>
+  </div>
+</div>
+
+<!-- ===================== MODALE : FIN DE PARTIE ===================== -->
+<div id="modale-fin" class="voile" hidden>
+  <div class="modale modale--fin">
+    <h2 id="fin-titre">Partie terminée !</h2>
+    <ol id="fin-classement" class="classement"></ol>
+    <button id="btn-fin-fermer" class="bouton bouton--or bouton--large">Retour à l'accueil</button>
+  </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
