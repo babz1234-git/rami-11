@@ -19,6 +19,10 @@ let modaleEtalerOuverte = false;
 // Rajout : carte en attente de destination
 let carteEnAttenteRajouter = null;
 let modaleRajouterOuverte = false;
+// AJOUT : quand on rajoute un joker/2 sur une suite, la position (avant la
+// première carte, ou après la dernière) est ambiguë -> on demande au joueur.
+// null quand aucun choix n'est en attente, sinon { carteId, indexGroupe }.
+let choixPositionRajout = null;
 
 // Main : carte actuellement "levée" (sélectionnée). Sert à la fois pour la
 // défausse (Défausser agit sur cette carte) et pour la réordonner (flèches).
@@ -113,6 +117,26 @@ function afficherErreurCiblee(message) {
   } else {
     toast(message);
   }
+}
+
+// AJOUT : pour un BRELAN (cartes de même valeur), on entrelace visuellement
+// les jokers/2 entre les cartes réelles (réelle, joker, réelle, joker...)
+// pour que ce soit immédiatement visible qu'aucun joker n'en touche un
+// autre — cohérent avec la règle qui l'interdit désormais. Une suite garde
+// l'ordre tel quel (l'ordre y est déjà significatif).
+function ordonnerPourAffichage(cartes) {
+  const reelles = cartes.filter((c) => !c.joker);
+  const wilds = cartes.filter((c) => c.joker);
+  const estBrelan = reelles.length > 0 && reelles.every((c) => c.valeur === reelles[0].valeur);
+  if (!estBrelan || wilds.length === 0) return cartes;
+
+  const resultat = [];
+  let iR = 0, iW = 0;
+  while (iR < reelles.length || iW < wilds.length) {
+    if (iR < reelles.length) resultat.push(reelles[iR++]);
+    if (iW < wilds.length) resultat.push(wilds[iW++]);
+  }
+  return resultat;
 }
 
 // -----------------------------------------------------------------------
@@ -370,7 +394,7 @@ function rendreTable(etat) {
   etat.tapis.forEach((groupe) => {
     const groupeDiv = document.createElement("div");
     groupeDiv.className = "groupe-tapis";
-    groupe.forEach((carte) => groupeDiv.appendChild(creerElementCarte(carte, { miniature: true })));
+    ordonnerPourAffichage(groupe).forEach((carte) => groupeDiv.appendChild(creerElementCarte(carte, { miniature: true })));
     tapisDiv.appendChild(groupeDiv);
   });
 
@@ -533,7 +557,10 @@ function rendreModaleEtaler() {
   });
 
   // Main disponible (glissable vers un groupe, ou cliquable en 2 temps)
-  const dispo = dernierEtat.ma_main.filter((c) => !placees.has(c.id));
+  // CORRECTION : on utilise le même ordre que celui choisi par le joueur
+  // dans sa main (mainOrdonnee), pas l'ordre brut renvoyé par le serveur —
+  // sinon les cartes changent de place entre la table et cette fenêtre.
+  const dispo = mainOrdonnee(dernierEtat).filter((c) => !placees.has(c.id));
   const mainDiv = el("etaler-main");
   mainDiv.innerHTML = "";
   dispo.forEach((carte) => {
@@ -598,7 +625,12 @@ el("btn-etaler-valider").addEventListener("click", () => {
 // -----------------------------------------------------------------------
 
 el("btn-action-rajouter").addEventListener("click", () => {
-  carteEnAttenteRajouter = null;
+  // AJOUT : si une carte était déjà sélectionnée dans la main (avant d'ouvrir
+  // cette fenêtre), on la garde "en attente" directement — il ne reste plus
+  // qu'à toucher le groupe visé, pas besoin de la resélectionner ici.
+  carteEnAttenteRajouter = carteSelectionneeMain || null;
+  carteSelectionneeMain = null;
+  choixPositionRajout = null;
   el("rajouter-erreur").textContent = "";
   modaleRajouterOuverte = true;
   rendreModaleRajouter();
@@ -607,11 +639,56 @@ el("btn-action-rajouter").addEventListener("click", () => {
 
 el("btn-rajouter-annuler").addEventListener("click", () => {
   modaleRajouterOuverte = false;
+  choixPositionRajout = null;
   el("modale-rajouter").hidden = true;
+});
+
+function estGroupeBrelan(groupe) {
+  const reelles = groupe.filter((c) => !c.joker);
+  return reelles.length > 0 && reelles.every((c) => c.valeur === reelles[0].valeur);
+}
+
+// AJOUT : point d'entrée unique pour tenter un rajout, qu'il vienne d'un
+// clic en 2 temps ou d'un glisser-déposer. Si la carte est un joker/2 et que
+// le groupe visé est une suite (pas un brelan), la position est ambiguë
+// (avant ou après) : on demande au joueur plutôt que de choisir à sa place.
+function tenterRajout(carteId, indexGroupe) {
+  const carteData = dernierEtat.ma_main.find((c) => c.id === carteId);
+  const groupe = dernierEtat.tapis[indexGroupe];
+  if (!carteData || !groupe) return;
+
+  if (carteData.joker && groupe.length > 0 && !estGroupeBrelan(groupe)) {
+    choixPositionRajout = { carteId, indexGroupe };
+    carteEnAttenteRajouter = null;
+    rendreModaleRajouter();
+    return;
+  }
+
+  socket.emit("rajouter", { code: monCode, carte_id: carteId, index_groupe: indexGroupe });
+  carteEnAttenteRajouter = null;
+}
+
+el("btn-position-debut").addEventListener("click", () => {
+  if (!choixPositionRajout) return;
+  socket.emit("rajouter", { code: monCode, carte_id: choixPositionRajout.carteId, index_groupe: choixPositionRajout.indexGroupe, position: "debut" });
+  choixPositionRajout = null;
+  rendreModaleRajouter();
+});
+el("btn-position-fin").addEventListener("click", () => {
+  if (!choixPositionRajout) return;
+  socket.emit("rajouter", { code: monCode, carte_id: choixPositionRajout.carteId, index_groupe: choixPositionRajout.indexGroupe, position: "fin" });
+  choixPositionRajout = null;
+  rendreModaleRajouter();
+});
+el("btn-position-annuler").addEventListener("click", () => {
+  choixPositionRajout = null;
+  rendreModaleRajouter();
 });
 
 function rendreModaleRajouter() {
   if (!dernierEtat) return;
+
+  el("rajouter-choix-position").hidden = !choixPositionRajout;
 
   const tapisDiv = el("rajouter-tapis");
   tapisDiv.innerHTML = "";
@@ -624,21 +701,20 @@ function rendreModaleRajouter() {
   dernierEtat.tapis.forEach((groupe, index) => {
     const boite = document.createElement("div");
     boite.className = "groupe-tapis cliquable";
-    groupe.forEach((carte) => boite.appendChild(creerElementCarte(carte, { miniature: true })));
+    ordonnerPourAffichage(groupe).forEach((carte) => boite.appendChild(creerElementCarte(carte, { miniature: true })));
     boite.addEventListener("click", () => {
       if (!carteEnAttenteRajouter) {
         el("rajouter-erreur").textContent = "Touche d'abord une carte de ta main.";
         return;
       }
-      socket.emit("rajouter", { code: monCode, carte_id: carteEnAttenteRajouter, index_groupe: index });
-      carteEnAttenteRajouter = null;
+      tenterRajout(carteEnAttenteRajouter, index);
     });
     tapisDiv.appendChild(boite);
   });
 
   const mainDiv = el("rajouter-main");
   mainDiv.innerHTML = "";
-  dernierEtat.ma_main.forEach((carte) => {
+  mainOrdonnee(dernierEtat).forEach((carte) => {
     const carteEl = creerElementCarte(carte, {
       selectionnable: true,
       selectionnee: carteEnAttenteRajouter === carte.id,
@@ -656,10 +732,11 @@ function rendreModaleRajouter() {
         if (groupeCible) {
           const index = Array.from(el("rajouter-tapis").children).indexOf(groupeCible);
           if (index !== -1) {
-            socket.emit("rajouter", { code: monCode, carte_id: carte.id, index_groupe: index });
+            tenterRajout(carte.id, index);
           }
+        } else {
+          carteEnAttenteRajouter = null;
         }
-        carteEnAttenteRajouter = null;
       },
     });
     mainDiv.appendChild(carteEl);
@@ -674,12 +751,13 @@ socket.on("resultat_mene", (data) => {
   // Si une modale d'action était ouverte, ses cartes sélectionnées font
   // référence à l'ancienne main : on ferme tout pour repartir propre.
   if (modaleEtalerOuverte) fermerModaleEtaler();
-  if (modaleRajouterOuverte) { modaleRajouterOuverte = false; el("modale-rajouter").hidden = true; }
+  if (modaleRajouterOuverte) { modaleRajouterOuverte = false; choixPositionRajout = null; el("modale-rajouter").hidden = true; }
   carteSelectionneeMain = null;
 
   const bonusTxt = data.bonus_fini_sec ? " (fini sec, points doublés !)" : "";
   el("resultat-titre").textContent = `${data.gagnant} remporte la manche !`;
-  el("resultat-detail").textContent = `+${data.points_gagnes} points${bonusTxt}`;
+  const detailTxt = `${data.gagnant} : 0 point · ` + data.details_perdants.map((p) => `${p.nom} +${p.points}`).join(" · ");
+  el("resultat-detail").textContent = detailTxt + bonusTxt;
 
   const liste = el("resultat-classement");
   liste.innerHTML = "";

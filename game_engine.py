@@ -1,5 +1,6 @@
 import random as rd
 import uuid
+import itertools
 
 CONTRATS = {
     1: [("brelan", 3), ("brelan", 3)],
@@ -257,7 +258,7 @@ class Partie:
             print(f"Échec ! Le contrat proposé par {joueur_actuel.nom} est invalide.")
             return False
 
-    def action_rajouter(self, index_carte_main, index_groupe_tapis):
+    def action_rajouter(self, index_carte_main, index_groupe_tapis, position="fin"):
         joueur_actuel = self.joueurs[self.joueur_actif]
 
         if not joueur_actuel.est_etale:
@@ -275,12 +276,28 @@ class Partie:
         carte = joueur_actuel.main[index_carte_main]
         groupe_cible = self.tapis[index_groupe_tapis]
 
+        # CORRECTION : bug trouvé en jouant. Dans une suite du style
+        # 7,8,[joker=9],10, rien n'empêchait d'ajouter un VRAI 9 par-dessus,
+        # alors que le joker occupe déjà cette place (on ne peut pas le
+        # déloger). On bloque ce cas avant même de tester la validité
+        # générale du groupe.
+        if carte.valeur not in (0, 2) and carte.valeur in _valeurs_bloquees_par_jokers(groupe_cible):
+            print("Rajout impossible : un joker de ce groupe représente déjà cette valeur.")
+            return False
+
         groupe_test = groupe_cible + [carte]
         nouvelle_taille = len(groupe_test)
 
         if brelan_valide(groupe_test, nouvelle_taille) or suite_valide(groupe_test, nouvelle_taille):
             carte_jetee = joueur_actuel.main.pop(index_carte_main)
-            self.tapis[index_groupe_tapis].append(carte_jetee)
+            # AJOUT : quand la carte rajoutée est un joker/2 qui prolonge la
+            # suite (plutôt que de combler un trou interne), le joueur choisit
+            # de quel côté l'afficher — avant la première carte, ou après la
+            # dernière (par défaut, comme avant).
+            if position == "debut":
+                self.tapis[index_groupe_tapis].insert(0, carte_jetee)
+            else:
+                self.tapis[index_groupe_tapis].append(carte_jetee)
             print(f"Rajout réussi ! {carte} a été ajoutée.")
             self.log(f"{joueur_actuel.nom} a rajouté {carte_jetee} sur le tapis.")
 
@@ -341,25 +358,27 @@ class Partie:
         return True
 
     def fin_de_mene(self, joueur_gagnant):
-        points_gagnes = 0
+        # CORRECTION : c'est l'inverse de ce que j'avais codé — le gagnant de
+        # la mène ne marque RIEN, ce sont les perdants qui encaissent CHACUN
+        # les points de LEUR PROPRE main (pas un total reversé au gagnant).
+        # Comme au golf : moins on a de points, mieux c'est, et c'est le
+        # score total le plus BAS qui l'emporte à la fin de la partie (voir
+        # gagnant_partie ci-dessous).
+        etait_etale = joueur_gagnant.est_etale
+        details_perdants = []
 
         for j in self.joueurs:
             if j != joueur_gagnant:
                 points_perdant = sum(carte.points for carte in j.main)
-                points_gagnes += points_perdant
-                print(f"{j.nom} termine avec {points_perdant} points en main.")
+                if not etait_etale:
+                    points_perdant *= 2
+                    print(f"Bonus ! {joueur_gagnant.nom} a fini sec : les points de {j.nom} sont doublés !")
+                j.score += points_perdant
+                details_perdants.append({"nom": j.nom, "points": points_perdant})
+                print(f"{j.nom} marque {points_perdant} points ce tour-ci (score total : {j.score}).")
 
-        # AJOUT : on garde une trace d'avant le bonus, pour pouvoir dire
-        # clairement au frontend "le bonus x2 s'est appliqué ou non".
-        etait_etale = joueur_gagnant.est_etale
-
-        if not joueur_gagnant.est_etale:
-            points_gagnes *= 2
-            print(f"Bonus ! {joueur_gagnant.nom} a fini sec : les points sont doublés !")
-
-        joueur_gagnant.score += points_gagnes
-        print(f"🏆 {joueur_gagnant.nom} remporte la mène et gagne {points_gagnes} points (Score total : {joueur_gagnant.score})\n")
-        self.log(f"Fin de la mène : {joueur_gagnant.nom} gagne {points_gagnes} points.")
+        print(f"🏆 {joueur_gagnant.nom} remporte la mène et ne marque aucun point !\n")
+        self.log(f"Fin de la mène : {joueur_gagnant.nom} gagne (0 point), les autres joueurs marquent les points de leur main.")
 
         niveau_termine = self.niveau_actuel
         self.niveau_actuel += 1
@@ -370,13 +389,14 @@ class Partie:
         # le prochain contrat).
         resultat = {
             "gagnant": joueur_gagnant.nom,
-            "points_gagnes": points_gagnes,
             "bonus_fini_sec": not etait_etale,
+            "details_perdants": details_perdants,
             "niveau_termine": niveau_termine,
             "description_contrat_termine": DESCRIPTIONS_CONTRATS.get(niveau_termine, ""),
+            # Classement du MEILLEUR au moins bon : score le plus bas d'abord.
             "classement": sorted(
                 [{"nom": j.nom, "score": j.score} for j in self.joueurs],
-                key=lambda x: -x["score"],
+                key=lambda x: x["score"],
             ),
         }
 
@@ -384,9 +404,9 @@ class Partie:
             print("========================================")
             print("🏁 FIN DE LA PARTIE GLOBALE !")
             print("========================================")
-            gagnant_partie = max(self.joueurs, key=lambda j: j.score)
-            print(f"Le grand vainqueur est {gagnant_partie.nom} avec un score total de {gagnant_partie.score} points !")
-            self.log(f"Partie terminée ! Vainqueur : {gagnant_partie.nom}.")
+            gagnant_partie = self.gagnant_partie()
+            print(f"Le grand vainqueur est {gagnant_partie.nom} avec le score le plus bas : {gagnant_partie.score} points !")
+            self.log(f"Partie terminée ! Vainqueur : {gagnant_partie.nom} (score le plus bas : {gagnant_partie.score} points).")
             resultat["partie_terminee"] = True
             resultat["prochain_niveau"] = None
             resultat["prochain_contrat_description"] = None
@@ -420,11 +440,49 @@ class Partie:
         return self.niveau_actuel > 11
 
     def gagnant_partie(self):
-        # AJOUT
-        return max(self.joueurs, key=lambda j: j.score)
+        # CORRECTION : le score le plus BAS gagne (les points sont une
+        # pénalité, pas une récompense).
+        return min(self.joueurs, key=lambda j: j.score)
 
 
-# --- LES FONCTIONS DE VÉRIFICATION (identiques à ton code original) ---
+# --- LES FONCTIONS DE VÉRIFICATION ---
+#
+# AJOUT (v2) : plusieurs corrections suite à des parties jouées en vrai :
+#   - un "2" peut être utilisé soit comme un joker, soit comme une vraie
+#     carte de valeur 2 à sa place naturelle (au choix, selon ce qui rend le
+#     groupe valide) — auparavant il était TOUJOURS considéré comme joker,
+#     ce qui empêchait par exemple "As, 2 (vraie carte), 2 (joker)".
+#   - l'As peut aussi servir de carte haute, juste après le Roi
+#     (Valet, Dame, Roi, As).
+#   - dans un brelan, deux jokers ne doivent jamais se "suivre" non plus :
+#     avec R cartes réelles, on ne peut pas avoir plus de R+1 jokers (il faut
+#     pouvoir les intercaler entre/autour des cartes réelles).
+
+
+def _sequence_valide_depuis_valeurs(valeurs_triees, nb_jokers):
+    """Cœur du calcul pour une suite : étant donné des valeurs réelles déjà
+    triées et un nombre de jokers disponibles, dit si ça forme une suite
+    valide (trous d'une seule carte comblés un par un, jamais deux jokers
+    d'affilée)."""
+    jokers_restants = nb_jokers
+    for i in range(len(valeurs_triees) - 1):
+        ecart = valeurs_triees[i + 1] - valeurs_triees[i]
+        if ecart == 0:
+            return False
+        elif ecart == 2:
+            if jokers_restants > 0:
+                jokers_restants -= 1
+            else:
+                return False
+        elif ecart >= 3:
+            return False
+
+    # Au plus 1 joker "en trop" (qui étend la suite au-delà du strict
+    # nécessaire) : au-delà, impossible de garantir qu'ils ne se suivent pas.
+    if jokers_restants > 1:
+        return False
+    return True
+
 
 def brelan_valide(liste_cartes, taille_voulue):
     if len(liste_cartes) < taille_voulue:
@@ -439,13 +497,23 @@ def brelan_valide(liste_cartes, taille_voulue):
         else:
             cartes_normales.append(carte)
 
-    if len(cartes_normales) == 0:
-        return True
+    if len(cartes_normales) > 0:
+        valeur_reference = cartes_normales[0].valeur
+        for carte in cartes_normales:
+            if carte.valeur != valeur_reference:
+                return False
 
-    valeur_reference = cartes_normales[0].valeur
-    for carte in cartes_normales:
-        if carte.valeur != valeur_reference:
-            return False
+    # CORRECTION : comme pour les suites, deux jokers ne doivent jamais se
+    # retrouver côte à côte. Un brelan n'a pas d'ordre imprimé sur la table,
+    # mais on peut toujours se représenter les cartes réelles posées avec un
+    # "emplacement" avant, entre chaque paire, et après : avec R cartes
+    # réelles, ça fait R+1 emplacements, donc au plus R+1 jokers (au-delà, au
+    # moins deux jokers doivent forcément partager un même emplacement, donc
+    # se toucher). Ça corrige au passage un cas limite : un groupe qui ne
+    # contiendrait QUE des jokers (R=0) n'est plus jamais valide pour une
+    # taille de 3+ (max 1 joker autorisé quand R=0).
+    if len(jokers) > len(cartes_normales) + 1:
+        return False
 
     return True
 
@@ -454,57 +522,75 @@ def suite_valide(liste_cartes, taille_voulue):
     if len(liste_cartes) < taille_voulue:
         return False
 
-    jokers = []
-    cartes_normales = []
+    jokers_purs = [c for c in liste_cartes if c.valeur == 0]
+    deux = [c for c in liste_cartes if c.valeur == 2]
+    autres = [c for c in liste_cartes if c.valeur not in (0, 2)]
 
-    for carte in liste_cartes:
-        if carte.valeur == 0 or carte.valeur == 2:
-            jokers.append(carte)
-        else:
-            cartes_normales.append(carte)
+    if not autres and not deux:
+        return False  # rien pour former une suite (que des jokers "purs")
 
-    if len(cartes_normales) == 0:
-        return False
+    # On essaie toutes les combinaisons possibles : chaque "2" peut être
+    # utilisé comme un joker, OU comme une vraie carte de valeur 2 (auquel
+    # cas sa couleur doit correspondre à la suite, comme toute carte
+    # normale). Le nombre de "2" dans un même groupe est toujours petit (au
+    # pire 8 dans tout le jeu), donc essayer toutes les combinaisons reste
+    # très rapide.
+    for choix in itertools.product([False, True], repeat=len(deux)):
+        cartes_normales = list(autres)
+        nb_jokers = len(jokers_purs)
 
-    couleur_suite = cartes_normales[0].couleur
-
-    for carte in cartes_normales:
-        if carte.couleur != couleur_suite:
-            return False
-
-    cartes_normales.sort(key=lambda carte: carte.valeur)
-
-    for i in range(len(cartes_normales) - 1):
-        carte_actuelle = cartes_normales[i]
-        carte_suivante = cartes_normales[i + 1]
-
-        ecart = carte_suivante.valeur - carte_actuelle.valeur
-
-        if ecart == 0:
-            return False
-        elif ecart == 2:
-            if len(jokers) > 0:
-                jokers.pop()
+        for utilise_comme_carte_normale, carte in zip(choix, deux):
+            if utilise_comme_carte_normale:
+                cartes_normales.append(carte)
             else:
-                return False
-        elif ecart >= 3:
-            return False
+                nb_jokers += 1
 
-    # CORRECTION : ta partie n'était pas mal codée par hasard, c'est un vrai
-    # bug que tu as trouvé en jouant. Le souci : une fois les trous internes
-    # comblés (ex: 3,4 puis un trou de 1 carte comblé par un joker, puis 6),
-    # il pouvait rester jusqu'à 2 jokers "en trop" non utilisés, ajoutés à la
-    # suite sans vérifier où ils se placent. Rien n'empêchait ces 2 jokers de
-    # se retrouver l'un à côté de l'autre (ex: 5,6,7 + 2 jokers d'affilée pour
-    # faire "8,9"), ce qui viole justement la règle "deux jokers ne peuvent
-    # pas se suivre". Comme rien dans le code ne sait distinguer "1 joker de
-    # chaque côté" (valide) de "2 jokers du même côté" (invalide) une fois les
-    # cartes mélangées dans une liste, la seule façon fiable d'empêcher ce cas
-    # est de n'autoriser qu'UN SEUL joker "en trop" au maximum.
-    if len(jokers) > 1:
-        return False
+        if not cartes_normales:
+            continue  # aucune carte "normale" dans cette combinaison -> pas de couleur de référence
 
-    return True
+        couleur_suite = cartes_normales[0].couleur
+        if any(c.couleur != couleur_suite for c in cartes_normales):
+            continue
+
+        valeurs = sorted(c.valeur for c in cartes_normales)
+        if _sequence_valide_depuis_valeurs(valeurs, nb_jokers):
+            return True
+
+        # L'As peut aussi être une carte haute (Valet, Dame, Roi, As).
+        if 1 in valeurs:
+            valeurs_as_haut = sorted(14 if v == 1 else v for v in valeurs)
+            if _sequence_valide_depuis_valeurs(valeurs_as_haut, nb_jokers):
+                return True
+
+    return False
+
+
+def _valeurs_bloquees_par_jokers(groupe_existant):
+    """AJOUT : pour un groupe DÉJÀ posé sur la table (donc déjà valide),
+    calcule les valeurs qu'un joker interne comble de façon certaine — un
+    trou d'une seule carte entre deux cartes réelles connues, ex: 7,8,[joker
+    pour 9],10 -> {9}. Sert à interdire d'ajouter une vraie carte à cette
+    valeur : le joker ne "se pousse" pas pour laisser la place.
+    Par prudence, les "2" existants du groupe sont considérés comme des
+    jokers ici (cas de loin le plus courant en pratique)."""
+    reels = sorted(c.valeur for c in groupe_existant if c.valeur not in (0, 2))
+    if len(reels) < 2:
+        return set()
+
+    bloquees = set()
+    for i in range(len(reels) - 1):
+        if reels[i + 1] - reels[i] == 2:
+            bloquees.add(reels[i] + 1)
+
+    if 1 in reels:
+        reels_haut = sorted(14 if v == 1 else v for v in reels)
+        for i in range(len(reels_haut) - 1):
+            if reels_haut[i + 1] - reels_haut[i] == 2:
+                v = reels_haut[i] + 1
+                if 1 <= v <= 13:
+                    bloquees.add(v)
+
+    return bloquees
 
 
 def verifier_contrat(niveau_actuel, groupes_proposes):

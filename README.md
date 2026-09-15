@@ -153,7 +153,49 @@ la main entre les groupes du contrat (jusqu'à 3 groupes, 12 cartes au pire) ;
 je l'ai testée sur les pires cas et elle répond en moins d'une demi-seconde,
 donc aucun souci de lenteur à prévoir.
 
-## 5. Comment j'ai organisé le multijoueur (pour que tu comprennes le code)
+## 5. Corrections suite à ta deuxième relecture des règles
+
+Ce sont les plus profondes depuis le début du projet — plusieurs vrais bugs
+de logique, trouvés en jouant pour de vrai. Tout est testé (moteur, serveur
+ET navigateur, avec tes exemples précis rejoués un par un).
+
+- **Le "2" a maintenant une double nature.** Avant, un "2" était TOUJOURS
+  considéré comme joker, jamais comme une vraie carte de valeur 2. Ton
+  exemple (As, 2 utilisé normalement, 2 utilisé comme joker) l'a révélé : le
+  moteur essaie maintenant les deux interprétations pour chaque "2" présent
+  et retient celle qui rend le groupe valide. C'est le changement le plus
+  important de cette série — voir `suite_valide` dans `game_engine.py`.
+- **L'As peut être une carte haute** : Valet, Dame, Roi (via un joker), As
+  est maintenant reconnu comme suite valide, en plus de son usage classique
+  en carte basse.
+- **Un joker "occupé" ne peut plus être doublé.** Dans une suite du style
+  7,8,[joker représentant le 9],10, il était possible de rajouter un VRAI 9
+  par-dessus, ce qui n'avait pas de sens (le joker ne se pousse pas). C'est
+  bloqué avant même de tester la validité générale du groupe.
+- **Score inversé.** C'était faux depuis le début et personne ne l'avait
+  remarqué avant que tu joues vraiment plusieurs manches : le gagnant d'une
+  mène marque désormais 0 point, et chaque perdant marque SES PROPRES points
+  (doublés si le gagnant a fini sec). C'est le score total le plus BAS qui
+  remporte la partie à la fin des 11 contrats (comme au golf).
+- **Brelans : jokers non-consécutifs aussi.** Un brelan de 3 sept avec 2
+  cartes réelles peut avoir au plus 3 jokers intercalés (un "emplacement"
+  avant/entre/après chaque carte réelle) — un 4ᵉ forcerait forcément deux
+  jokers à se toucher, donc c'est refusé. Ça corrige au passage un très
+  vieux cas limite : un groupe 100% jokers n'est plus jamais valide.
+- **Choix de la position pour un joker rajouté.** Quand tu rajoutes un
+  joker/2 pour prolonger une suite existante (ex : sur 4-5-6), une petite
+  fenêtre te demande maintenant si tu veux l'ajouter avant la première carte
+  ou après la dernière, plutôt que de le mettre systématiquement à la fin.
+- **Cohérence visuelle.** Les cartes s'affichent maintenant dans le même
+  ordre dans "S'étaler" que dans ta main normale (avant, elles étaient
+  réordonnées et ça perdait le rangement que tu avais fait). Les brelans
+  affichent leurs jokers entrelacés avec les cartes réelles (jamais deux
+  côte à côte), pour que la règle se voie d'un coup d'œil.
+- **Rajout plus rapide.** Si tu avais déjà sélectionné une carte dans ta main
+  avant de cliquer "Rajouter sur la table", elle est directement prête —
+  plus besoin de la retoucher dans la fenêtre qui s'ouvre.
+
+## 6. Comment j'ai organisé le multijoueur (pour que tu comprennes le code)
 
 - Un salon = un code à 4 caractères + une instance de `Partie`. Tout vit en
   mémoire dans `server.py` (dictionnaire `rooms`) : si le serveur redémarre,
@@ -171,7 +213,7 @@ donc aucun souci de lenteur à prévoir.
   vérifier que c'est bien le tour de la personne qui envoie une action. Plus
   de détails ci-dessous.
 
-## 6. Mes retours sur `game_engine.py` original
+## 7. Mes retours sur `game_engine.py` original
 
 Tu m'as dit d'être franc si j'avais des remarques, donc les voici — rien de
 grave, mais des points utiles à connaître :
@@ -221,7 +263,7 @@ qui ne deviennent des problèmes qu'au moment où plusieurs personnes non
 "de confiance" interagissent avec le moteur en même temps, ce qui est
 précisément le changement qu'on vient de faire.
 
-## 7. Limites connues de cette version
+## 8. Limites connues de cette version
 
 - Pas de reconnexion automatique si quelqu'un ferme l'onglet par erreur en
   pleine partie : la personne doit rouvrir la page et rejoindre avec le

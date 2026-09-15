@@ -127,9 +127,11 @@ def diffuser_etat(code):
 
     if partie.est_terminee():
         gagnant = partie.gagnant_partie()
+        # CORRECTION : score le plus bas en tête (les points sont une
+        # pénalité désormais, cf. game_engine.py).
         classement = sorted(
             [{"nom": j.nom, "score": j.score} for j in partie.joueurs],
-            key=lambda x: -x["score"],
+            key=lambda x: x["score"],
         )
         socketio.emit(
             "partie_terminee",
@@ -328,6 +330,7 @@ def on_rajouter(data):
     joueur_actuel = partie.joueurs[partie.joueur_actif]
     carte_id = (data or {}).get("carte_id")
     index_groupe = (data or {}).get("index_groupe")
+    position = (data or {}).get("position", "fin")  # AJOUT : "debut" ou "fin"
 
     index_carte = next(
         (i for i, c in enumerate(joueur_actuel.main) if c.id == carte_id), None
@@ -335,7 +338,7 @@ def on_rajouter(data):
     if index_carte is None or index_groupe is None:
         return erreur("Sélection invalide.")
 
-    if not partie.action_rajouter(index_carte, int(index_groupe)):
+    if not partie.action_rajouter(index_carte, int(index_groupe), position):
         return erreur("Cette carte ne peut pas être ajoutée à ce groupe.")
     diffuser_etat(salle["code"])
 
