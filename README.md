@@ -195,7 +195,49 @@ ET navigateur, avec tes exemples précis rejoués un par un).
   avant de cliquer "Rajouter sur la table", elle est directement prête —
   plus besoin de la retoucher dans la fenêtre qui s'ouvre.
 
-## 6. Comment j'ai organisé le multijoueur (pour que tu comprennes le code)
+## 6. Troisième relecture — bugs trouvés grâce à tes captures d'écran
+
+Ceux-là étaient plus subtils : plusieurs venaient du fait que rajouter une
+carte à un groupe DÉJÀ posé (donc déjà valide) n'a en réalité qu'une seule
+possibilité — prolonger une extrémité, jamais glisser une carte au milieu.
+Le code ne s'appuyait pas encore sur cette logique, d'où plusieurs trous.
+
+- **Rajout d'une carte réelle : la position se déduit automatiquement.**
+  Sur une suite 10-V-D-R-As, rajouter un 9 le place maintenant avant le 10
+  sans poser de question (la position d'une carte réelle est déterminée par
+  sa valeur, aucune ambiguïté) — avant, il atterrissait bêtement à la fin.
+- **Deux jokers à des extrémités opposées, c'est permis.** Sur
+  Joker-V-D-R, rajouter un second joker "après la dernière carte" est
+  désormais accepté (les deux jokers ne se touchent pas, un de chaque
+  côté d'une série de cartes réelles) — avant, un plafond trop prudent
+  bloquait ce cas pourtant valide, et il n'y avait nulle part où le poser.
+- **Un joker "en bout" bloque aussi sa valeur.** Sur 5-6-7-[joker pour 8],
+  rajouter un vrai 8 est refusé (le joker occupe déjà cette place tout au
+  bout, pas seulement pour les trous internes comme avant).
+- **Affichage suite vs brelan corrigé.** Le "2" étant toujours marqué comme
+  "joker" au niveau de la carte elle-même (même quand il sert de vraie
+  carte dans une suite), l'affichage confondait à tort une suite comme
+  As-2-3 avec un brelan et la réordonnait n'importe comment. La détection
+  se base maintenant sur les cartes sans ambiguïté (ni Joker ni "2") :
+  si elles ont des valeurs différentes, c'est forcément une suite.
+- **La "carte morte" est maintenant obligatoire.** Il est désormais
+  impossible de s'étaler ou de rajouter sa toute dernière carte : il faut
+  toujours en garder au moins une pour la défausser normalement, ce qui
+  signe la fin de la manche. Quand il ne te reste qu'une carte, l'interface
+  te le dit clairement et grise les boutons qui n'ont plus lieu d'être
+  (seule la défausse reste possible). Ça ne s'applique volontairement pas à
+  "Terminer (main cachée)", qui reste un cas à part : tu révèles tout d'un
+  coup en une seule déclaration, ce n'est pas une carte qu'on pose petit à
+  petit. Dis-moi si tu préfères que j'harmonise ce point aussi.
+- **Flèches qui bouclent.** Déplacer la dernière carte vers la droite
+  l'amène maintenant en première position, et inversement pour la première
+  carte vers la gauche.
+- **Annuler un rajout ne bloque plus la défausse.** Sélectionner une carte,
+  ouvrir "Rajouter sur la table" puis se raviser laisse maintenant la carte
+  sélectionnée dans la main : plus besoin de cliquer ailleurs puis de
+  revenir pour pouvoir enfin la défausser.
+
+## 7. Comment j'ai organisé le multijoueur (pour que tu comprennes le code)
 
 - Un salon = un code à 4 caractères + une instance de `Partie`. Tout vit en
   mémoire dans `server.py` (dictionnaire `rooms`) : si le serveur redémarre,
@@ -213,7 +255,7 @@ ET navigateur, avec tes exemples précis rejoués un par un).
   vérifier que c'est bien le tour de la personne qui envoie une action. Plus
   de détails ci-dessous.
 
-## 7. Mes retours sur `game_engine.py` original
+## 8. Mes retours sur `game_engine.py` original
 
 Tu m'as dit d'être franc si j'avais des remarques, donc les voici — rien de
 grave, mais des points utiles à connaître :
@@ -263,7 +305,7 @@ qui ne deviennent des problèmes qu'au moment où plusieurs personnes non
 "de confiance" interagissent avec le moteur en même temps, ce qui est
 précisément le changement qu'on vient de faire.
 
-## 8. Limites connues de cette version
+## 9. Limites connues de cette version
 
 - Pas de reconnexion automatique si quelqu'un ferme l'onglet par erreur en
   pleine partie : la personne doit rouvrir la page et rejoindre avec le

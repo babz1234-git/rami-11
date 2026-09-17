@@ -234,6 +234,14 @@ class Partie:
             return False
 
         if verifier_contrat(self.niveau_actuel, groupes_proposes):
+            # CORRECTION : il faut toujours garder au moins une carte "morte"
+            # à défausser normalement pour signifier qu'on a fini — ce n'est
+            # jamais l'étalement lui-même qui doit vider la main à 0.
+            nb_cartes_utilisees = sum(len(groupe) for groupe in groupes_proposes)
+            if nb_cartes_utilisees >= len(joueur_actuel.main):
+                print(f"{joueur_actuel.nom} doit garder au moins une carte à défausser pour terminer.")
+                return False
+
             print(f"Félicitations {joueur_actuel.nom} ! Contrat validé.")
             joueur_actuel.est_etale = True
 
@@ -244,15 +252,6 @@ class Partie:
 
             self.tapis.extend(groupes_proposes)
             self.log(f"{joueur_actuel.nom} a validé son contrat et s'est étalé !")
-
-            # AJOUT : si l'étalement vide complètement la main (le joueur avait
-            # gardé tout son jeu et le pose d'un coup), la manche se termine
-            # immédiatement — ton code original ne vérifiait ce cas que dans
-            # action_defausser, ce qui aurait laissé la partie bloquée ici.
-            if len(joueur_actuel.main) == 0:
-                self.log(f"{joueur_actuel.nom} s'étale avec toute sa main et termine la manche !")
-                self.fin_de_mene(joueur_actuel)
-
             return True
         else:
             print(f"Échec ! Le contrat proposé par {joueur_actuel.nom} est invalide.")
@@ -273,41 +272,57 @@ class Partie:
         if not (0 <= index_groupe_tapis < len(self.tapis)):
             return False
 
+        # CORRECTION : même principe que pour action_etaler — il faut
+        # toujours garder au moins une carte "morte" à défausser normalement.
+        # Un rajout ne doit jamais être LA carte qui vide la main à 0.
+        if len(joueur_actuel.main) <= 1:
+            print(f"{joueur_actuel.nom} doit garder sa dernière carte pour la défausser.")
+            return False
+
         carte = joueur_actuel.main[index_carte_main]
         groupe_cible = self.tapis[index_groupe_tapis]
-
-        # CORRECTION : bug trouvé en jouant. Dans une suite du style
-        # 7,8,[joker=9],10, rien n'empêchait d'ajouter un VRAI 9 par-dessus,
-        # alors que le joker occupe déjà cette place (on ne peut pas le
-        # déloger). On bloque ce cas avant même de tester la validité
-        # générale du groupe.
-        if carte.valeur not in (0, 2) and carte.valeur in _valeurs_bloquees_par_jokers(groupe_cible):
-            print("Rajout impossible : un joker de ce groupe représente déjà cette valeur.")
-            return False
 
         groupe_test = groupe_cible + [carte]
         nouvelle_taille = len(groupe_test)
 
-        if brelan_valide(groupe_test, nouvelle_taille) or suite_valide(groupe_test, nouvelle_taille):
+        position_effective = "fin"
+        valide = False
+
+        if brelan_valide(groupe_test, nouvelle_taille):
+            valide = True
+        else:
+            # CORRECTION : un groupe déjà posé est, par construction, déjà
+            # une suite valide SANS trou interne ouvert (tous les trous ont
+            # forcément déjà été comblés par un joker pour qu'il soit valide
+            # au départ). La SEULE façon d'y ajouter une carte est donc de
+            # prolonger l'une des deux extrémités — jamais de "glisser" une
+            # carte au milieu. On vérifie ça précisément plutôt que de
+            # rejouer suite_valide sur le tas complet (qui, ne sachant pas où
+            # se trouve chaque carte, devait rester prudent sur le nombre de
+            # jokers "en trop" tolérés).
+            if carte.valeur not in (0, 2):
+                # Carte réelle : sa place est déterminée par sa valeur, pas
+                # besoin de demander — on essaie les deux côtés.
+                if _extension_suite_ok(groupe_cible, carte, "debut"):
+                    position_effective = "debut"
+                    valide = True
+                elif _extension_suite_ok(groupe_cible, carte, "fin"):
+                    position_effective = "fin"
+                    valide = True
+            else:
+                # Joker/2 : ambigu, on respecte le côté choisi par le joueur.
+                if _extension_suite_ok(groupe_cible, carte, position):
+                    position_effective = position
+                    valide = True
+
+        if valide:
             carte_jetee = joueur_actuel.main.pop(index_carte_main)
-            # AJOUT : quand la carte rajoutée est un joker/2 qui prolonge la
-            # suite (plutôt que de combler un trou interne), le joueur choisit
-            # de quel côté l'afficher — avant la première carte, ou après la
-            # dernière (par défaut, comme avant).
-            if position == "debut":
+            if position_effective == "debut":
                 self.tapis[index_groupe_tapis].insert(0, carte_jetee)
             else:
                 self.tapis[index_groupe_tapis].append(carte_jetee)
             print(f"Rajout réussi ! {carte} a été ajoutée.")
             self.log(f"{joueur_actuel.nom} a rajouté {carte_jetee} sur le tapis.")
-
-            # AJOUT : même remarque que pour action_etaler — un rajout peut
-            # lui aussi vider complètement la main (ex : un joueur étalé qui
-            # se débarrasse de sa toute dernière carte sur le tapis).
-            if len(joueur_actuel.main) == 0:
-                self.log(f"{joueur_actuel.nom} se débarrasse de sa dernière carte et termine la manche !")
-                self.fin_de_mene(joueur_actuel)
-
             return True
         else:
             print("Rajout impossible : la carte ne rentre pas dans ce groupe.")
@@ -565,32 +580,70 @@ def suite_valide(liste_cartes, taille_voulue):
     return False
 
 
-def _valeurs_bloquees_par_jokers(groupe_existant):
-    """AJOUT : pour un groupe DÉJÀ posé sur la table (donc déjà valide),
-    calcule les valeurs qu'un joker interne comble de façon certaine — un
-    trou d'une seule carte entre deux cartes réelles connues, ex: 7,8,[joker
-    pour 9],10 -> {9}. Sert à interdire d'ajouter une vraie carte à cette
-    valeur : le joker ne "se pousse" pas pour laisser la place.
-    Par prudence, les "2" existants du groupe sont considérés comme des
-    jokers ici (cas de loin le plus courant en pratique)."""
-    reels = sorted(c.valeur for c in groupe_existant if c.valeur not in (0, 2))
-    if len(reels) < 2:
-        return set()
+def _valeurs_effectives(groupe):
+    """AJOUT : valeurs réelles d'un groupe déjà validé, l'As étant résolu
+    bas ou haut selon l'interprétation qui rend le groupe cohérent (utile
+    pour savoir comment le groupe peut être prolongé)."""
+    reels = [c.valeur for c in groupe if c.valeur not in (0, 2)]
+    if 1 not in reels:
+        return sorted(reels)
 
-    bloquees = set()
-    for i in range(len(reels) - 1):
-        if reels[i + 1] - reels[i] == 2:
-            bloquees.add(reels[i] + 1)
+    nb_jokers = sum(1 for c in groupe if c.valeur in (0, 2))
+    bas = sorted(reels)
+    haut = sorted(14 if v == 1 else v for v in reels)
+    if _sequence_valide_depuis_valeurs(haut, nb_jokers) and not _sequence_valide_depuis_valeurs(bas, nb_jokers):
+        return haut
+    return bas
 
-    if 1 in reels:
-        reels_haut = sorted(14 if v == 1 else v for v in reels)
-        for i in range(len(reels_haut) - 1):
-            if reels_haut[i + 1] - reels_haut[i] == 2:
-                v = reels_haut[i] + 1
-                if 1 <= v <= 13:
-                    bloquees.add(v)
 
-    return bloquees
+def _extension_suite_ok(groupe_existant, nouvelle_carte, position):
+    """AJOUT : un groupe déjà posé sur la table est, par construction, déjà
+    une suite valide SANS trou interne ouvert (sinon il n'aurait pas été
+    valide). La SEULE façon d'y ajouter une carte est donc de prolonger une
+    extrémité — jamais de "glisser" une carte au milieu. Cette fonction dit
+    si nouvelle_carte peut prolonger le côté demandé ('debut' ou 'fin').
+
+    Corrige deux bugs trouvés en jouant :
+    - une carte réelle ne doit jamais pouvoir prendre la place d'un joker
+      qui occupe déjà cette extrémité (ex: 5,6,7,[joker pour 8] -> un vrai 8
+      est refusé, le joker est déjà là) ;
+    - deux jokers ne doivent jamais se toucher, mais s'ils sont chacun à une
+      extrémité opposée d'une série de cartes réelles consécutives, ce n'est
+      pas un souci puisqu'ils ne se touchent pas (ex: [joker],V,D,R accepte
+      bien un second joker en position 'fin', juste pas en 'debut')."""
+    if not groupe_existant:
+        return False
+
+    carte_bord = groupe_existant[0] if position == "debut" else groupe_existant[-1]
+
+    # Toute carte (réelle ou joker) qui prolongerait une extrémité déjà
+    # occupée par un joker/2 est refusée : cette place est déjà prise, et un
+    # joker ne peut jamais se retrouver à côté d'un autre joker/2.
+    if carte_bord.valeur in (0, 2):
+        return False
+
+    if nouvelle_carte.valeur in (0, 2):
+        valeurs = _valeurs_effectives(groupe_existant)
+        if not valeurs:
+            return False
+        return (min(valeurs) > 1) if position == "debut" else (max(valeurs) < 14)
+
+    couleur_ref = next((c.couleur for c in groupe_existant if c.valeur not in (0, 2)), None)
+    if couleur_ref is not None and nouvelle_carte.couleur != couleur_ref:
+        return False
+
+    valeurs = _valeurs_effectives(groupe_existant)
+    if not valeurs:
+        return False
+
+    if position == "debut":
+        return nouvelle_carte.valeur == min(valeurs) - 1
+
+    if nouvelle_carte.valeur == max(valeurs) + 1:
+        return True
+    if max(valeurs) == 13 and nouvelle_carte.valeur == 1:
+        return True  # As haut après un Roi
+    return False
 
 
 def verifier_contrat(niveau_actuel, groupes_proposes):

@@ -124,11 +124,23 @@ function afficherErreurCiblee(message) {
 // pour que ce soit immédiatement visible qu'aucun joker n'en touche un
 // autre — cohérent avec la règle qui l'interdit désormais. Une suite garde
 // l'ordre tel quel (l'ordre y est déjà significatif).
+//
+// CORRECTION : détecter "brelan" via carte.joker (vrai pour TOUT "2", même
+// utilisé comme vraie carte dans une suite) faisait croire à tort qu'une
+// suite du style As-2(normal)-3 était un brelan (le 2 étant exclu comme
+// "joker", il ne restait qu'une seule carte "réelle" apparente, donc
+// "toutes les cartes réelles ont la même valeur" par défaut). On se base
+// désormais sur les cartes SANS AMBIGUÏTÉ (ni Joker, ni "2") : si elles ont
+// toutes la même valeur, c'est un brelan ; si elles ont des valeurs
+// différentes, c'est forcément une suite (jamais l'inverse).
 function ordonnerPourAffichage(cartes) {
+  const sansAmbiguite = cartes.filter((c) => c.valeur !== 0 && c.valeur !== 2);
+  const estBrelan = sansAmbiguite.length >= 2 && sansAmbiguite.every((c) => c.valeur === sansAmbiguite[0].valeur);
+  if (!estBrelan) return cartes; // suite, ou cas trop ambigu (quasi jamais en pratique) : ordre inchangé
+
   const reelles = cartes.filter((c) => !c.joker);
   const wilds = cartes.filter((c) => c.joker);
-  const estBrelan = reelles.length > 0 && reelles.every((c) => c.valeur === reelles[0].valeur);
-  if (!estBrelan || wilds.length === 0) return cartes;
+  if (wilds.length === 0) return cartes;
 
   const resultat = [];
   let iR = 0, iW = 0;
@@ -410,9 +422,15 @@ function rendreTable(etat) {
 
   // Boutons d'action
   const peutAgir = monTour && etat.a_pioche_ce_tour;
-  el("btn-action-etaler").disabled = !peutAgir || etat.je_suis_etale;
-  el("btn-action-rajouter").disabled = !peutAgir || !etat.je_suis_etale;
-  el("btn-action-finir-sec").disabled = !peutAgir || etat.je_suis_etale;
+  // AJOUT : il faut toujours garder une carte "morte" à défausser pour
+  // terminer — impossible de s'étaler/rajouter/finir sec avec sa toute
+  // dernière carte (le serveur le refuserait de toute façon, mais autant
+  // le rendre clair tout de suite plutôt que de laisser cliquer dans le vide).
+  const carteMorteObligatoire = peutAgir && etat.ma_main.length === 1;
+
+  el("btn-action-etaler").disabled = !peutAgir || etat.je_suis_etale || carteMorteObligatoire;
+  el("btn-action-rajouter").disabled = !peutAgir || !etat.je_suis_etale || carteMorteObligatoire;
+  el("btn-action-finir-sec").disabled = !peutAgir || etat.je_suis_etale || carteMorteObligatoire;
   el("btn-action-finir-sec").hidden = etat.je_suis_etale;
   el("btn-action-defausser").disabled = !peutAgir || !carteSelectionneeMain;
 
@@ -420,6 +438,8 @@ function rendreTable(etat) {
     el("jeu-aide-action").textContent = peutAgir
       ? "Carte sélectionnée — touche \"Défausser\" pour confirmer, ou les flèches pour la déplacer."
       : "Carte sélectionnée — touche les flèches pour la déplacer dans ta main.";
+  } else if (carteMorteObligatoire) {
+    el("jeu-aide-action").textContent = "Il ne te reste qu'une carte : sélectionne-la puis défausse-la pour terminer la manche.";
   } else {
     el("jeu-aide-action").textContent = !monTour ? "" : (!etat.a_pioche_ce_tour ? "Pioche une carte pour commencer ton tour." : "");
   }
@@ -462,13 +482,18 @@ el("btn-action-defausser").addEventListener("click", () => {
   carteSelectionneeMain = null;
 });
 
-// AJOUT : flèches pour réordonner sa main (échange avec la carte voisine).
-// Ça marche à tout moment, même hors de ton tour, pour organiser sa main.
+// AJOUT : flèches pour réordonner sa main (échange avec la carte voisine,
+// en bouclant d'un bout à l'autre : depuis la dernière carte, "droite"
+// ramène à la première position, et inversement pour "gauche" depuis la
+// première). Ça marche à tout moment, même hors de ton tour.
 function deplacerCarteSelectionnee(direction) {
   if (!carteSelectionneeMain) return;
   const index = ordreMainIds.indexOf(carteSelectionneeMain);
-  const nouvelIndex = index + direction;
-  if (index === -1 || nouvelIndex < 0 || nouvelIndex >= ordreMainIds.length) return;
+  if (index === -1) return;
+  const n = ordreMainIds.length;
+  let nouvelIndex = index + direction;
+  if (nouvelIndex < 0) nouvelIndex = n - 1;
+  if (nouvelIndex >= n) nouvelIndex = 0;
   [ordreMainIds[index], ordreMainIds[nouvelIndex]] = [ordreMainIds[nouvelIndex], ordreMainIds[index]];
   if (dernierEtat) rendreTable(dernierEtat);
 }
@@ -640,12 +665,24 @@ el("btn-action-rajouter").addEventListener("click", () => {
 el("btn-rajouter-annuler").addEventListener("click", () => {
   modaleRajouterOuverte = false;
   choixPositionRajout = null;
+  // CORRECTION : si une carte était en attente (sélectionnée dans la main,
+  // ou choisie dans cette fenêtre) sans qu'on ait finalisé le rajout, elle
+  // reste sélectionnée dans la main en refermant — sinon il fallait cliquer
+  // sur une autre carte puis revenir pour pouvoir enfin la défausser.
+  if (carteEnAttenteRajouter) {
+    carteSelectionneeMain = carteEnAttenteRajouter;
+    carteEnAttenteRajouter = null;
+  }
   el("modale-rajouter").hidden = true;
+  if (dernierEtat) rendreTable(dernierEtat);
 });
 
 function estGroupeBrelan(groupe) {
-  const reelles = groupe.filter((c) => !c.joker);
-  return reelles.length > 0 && reelles.every((c) => c.valeur === reelles[0].valeur);
+  // CORRECTION : même bug que ordonnerPourAffichage — se baser sur les
+  // cartes sans ambiguïté (ni Joker ni "2"), pas sur le flag .joker qui
+  // exclurait à tort un "2" utilisé comme vraie carte dans une suite.
+  const sansAmbiguite = groupe.filter((c) => c.valeur !== 0 && c.valeur !== 2);
+  return sansAmbiguite.length >= 2 && sansAmbiguite.every((c) => c.valeur === sansAmbiguite[0].valeur);
 }
 
 // AJOUT : point d'entrée unique pour tenter un rajout, qu'il vienne d'un
