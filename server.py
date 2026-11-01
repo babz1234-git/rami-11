@@ -98,7 +98,10 @@ def etat_pour(partie, pseudo):
         "pioche_count": len(partie.pioche),
         "defausse_top": partie.defausse[-1].to_dict() if partie.defausse else None,
         "defausse_count": len(partie.defausse),
-        "tapis": [[c.to_dict() for c in groupe] for groupe in partie.tapis],
+        "tapis": [
+            {"proprietaire": groupe["proprietaire"], "cartes": [c.to_dict() for c in groupe["cartes"]]}
+            for groupe in partie.tapis
+        ],
         "joueurs": [j.to_dict_public() for j in partie.joueurs],
         "ma_main": sorted(
             [c.to_dict() for c in moi.main],

@@ -250,7 +250,10 @@ class Partie:
                     if carte in joueur_actuel.main:
                         joueur_actuel.main.remove(carte)
 
-            self.tapis.extend(groupes_proposes)
+            # AJOUT : chaque groupe posé mémorise qui l'a étalé, pour que
+            # l'affichage puisse regrouper le tapis par "zone" de joueur.
+            for groupe in groupes_proposes:
+                self.tapis.append({"proprietaire": joueur_actuel.nom, "cartes": groupe})
             self.log(f"{joueur_actuel.nom} a validé son contrat et s'est étalé !")
             return True
         else:
@@ -280,7 +283,7 @@ class Partie:
             return False
 
         carte = joueur_actuel.main[index_carte_main]
-        groupe_cible = self.tapis[index_groupe_tapis]
+        groupe_cible = self.tapis[index_groupe_tapis]["cartes"]
 
         groupe_test = groupe_cible + [carte]
         nouvelle_taille = len(groupe_test)
@@ -318,9 +321,9 @@ class Partie:
         if valide:
             carte_jetee = joueur_actuel.main.pop(index_carte_main)
             if position_effective == "debut":
-                self.tapis[index_groupe_tapis].insert(0, carte_jetee)
+                self.tapis[index_groupe_tapis]["cartes"].insert(0, carte_jetee)
             else:
-                self.tapis[index_groupe_tapis].append(carte_jetee)
+                self.tapis[index_groupe_tapis]["cartes"].append(carte_jetee)
             print(f"Rajout réussi ! {carte} a été ajoutée.")
             self.log(f"{joueur_actuel.nom} a rajouté {carte_jetee} sur le tapis.")
             return True
@@ -366,7 +369,8 @@ class Partie:
             print(f"La main de {joueur_actuel.nom} ne se répartit pas exactement selon le contrat.")
             return False
 
-        self.tapis.extend(arrangement)
+        for groupe in arrangement:
+            self.tapis.append({"proprietaire": joueur_actuel.nom, "cartes": groupe})
         joueur_actuel.main = []
         self.log(f"{joueur_actuel.nom} retourne toute sa main d'un coup et termine la manche, sans jamais s'être étalé !")
         self.fin_de_mene(joueur_actuel)
@@ -580,20 +584,34 @@ def suite_valide(liste_cartes, taille_voulue):
     return False
 
 
-def _valeurs_effectives(groupe):
-    """AJOUT : valeurs réelles d'un groupe déjà validé, l'As étant résolu
-    bas ou haut selon l'interprétation qui rend le groupe cohérent (utile
-    pour savoir comment le groupe peut être prolongé)."""
-    reels = [c.valeur for c in groupe if c.valeur not in (0, 2)]
-    if 1 not in reels:
-        return sorted(reels)
+def _valeurs_conceptuelles_groupe(groupe):
+    """AJOUT (correction bug As-de-carreau) : reconstruit la valeur
+    conceptuelle de CHAQUE position du groupe, joker/2 compris — pas
+    seulement celle des cartes réelles comme le faisait l'ancienne
+    _valeurs_effectives. C'est indispensable dès qu'un joker se trouve plus
+    à l'extérieur que la carte réelle la plus extrême : ignorer sa position
+    faisait croire que le "bord" du groupe était la carte réelle, alors que
+    c'est le joker qui occupe réellement cette extrémité.
 
-    nb_jokers = sum(1 for c in groupe if c.valeur in (0, 2))
-    bas = sorted(reels)
-    haut = sorted(14 if v == 1 else v for v in reels)
-    if _sequence_valide_depuis_valeurs(haut, nb_jokers) and not _sequence_valide_depuis_valeurs(bas, nb_jokers):
-        return haut
-    return bas
+    Principe : dans une suite valide, la carte à l'index i a toujours la
+    valeur (v_min + i) où v_min est la valeur conceptuelle de la toute
+    première position. On calcule v_min à partir de n'importe quelle carte
+    réelle (valeur_reelle - son_index), en essayant l'As bas (1) puis l'As
+    haut (14) — l'interprétation qui donne le MÊME v_min pour toutes les
+    cartes réelles du groupe est la bonne. Renvoie la liste des valeurs
+    conceptuelles (une par position, longueur = len(groupe)), ou None si
+    le groupe ne contient aucune carte réelle exploitable."""
+    reels = [(i, c.valeur) for i, c in enumerate(groupe) if c.valeur not in (0, 2)]
+    if not reels:
+        return None
+
+    for as_haut in (False, True):
+        candidats = {(14 if (as_haut and v == 1) else v) - i for i, v in reels}
+        if len(candidats) == 1:
+            v_min = candidats.pop()
+            return [v_min + i for i in range(len(groupe))]
+
+    return None
 
 
 def _extension_suite_ok(groupe_existant, nouvelle_carte, position):
@@ -603,45 +621,43 @@ def _extension_suite_ok(groupe_existant, nouvelle_carte, position):
     extrémité — jamais de "glisser" une carte au milieu. Cette fonction dit
     si nouvelle_carte peut prolonger le côté demandé ('debut' ou 'fin').
 
-    Corrige deux bugs trouvés en jouant :
+    Règles respectées :
     - une carte réelle ne doit jamais pouvoir prendre la place d'un joker
       qui occupe déjà cette extrémité (ex: 5,6,7,[joker pour 8] -> un vrai 8
-      est refusé, le joker est déjà là) ;
-    - deux jokers ne doivent jamais se toucher, mais s'ils sont chacun à une
-      extrémité opposée d'une série de cartes réelles consécutives, ce n'est
-      pas un souci puisqu'ils ne se touchent pas (ex: [joker],V,D,R accepte
-      bien un second joker en position 'fin', juste pas en 'debut')."""
+      est refusé, le joker représente déjà ce 8) ;
+    - deux jokers ne doivent jamais se toucher — mais CETTE restriction ne
+      s'applique QUE quand la nouvelle carte est elle-même un joker/2. Une
+      carte RÉELLE peut parfaitement prolonger un groupe dont le bord est
+      déjà un joker (ex: As de Carreau avant un 2 de Pique utilisé comme
+      joker en tête d'une suite de Carreau) — c'était le bug corrigé ici,
+      l'ancienne version refusait ça à tort pour toute carte, réelle ou pas."""
     if not groupe_existant:
         return False
 
     carte_bord = groupe_existant[0] if position == "debut" else groupe_existant[-1]
 
-    # Toute carte (réelle ou joker) qui prolongerait une extrémité déjà
-    # occupée par un joker/2 est refusée : cette place est déjà prise, et un
-    # joker ne peut jamais se retrouver à côté d'un autre joker/2.
-    if carte_bord.valeur in (0, 2):
+    if nouvelle_carte.valeur in (0, 2) and carte_bord.valeur in (0, 2):
+        # Un joker/2 ne doit jamais se retrouver à côté d'un autre joker/2.
         return False
 
+    valeurs = _valeurs_conceptuelles_groupe(groupe_existant)
+    if not valeurs:
+        return False
+    v_bord = valeurs[0] if position == "debut" else valeurs[-1]
+    v_attendue = v_bord - 1 if position == "debut" else v_bord + 1
+
     if nouvelle_carte.valeur in (0, 2):
-        valeurs = _valeurs_effectives(groupe_existant)
-        if not valeurs:
-            return False
-        return (min(valeurs) > 1) if position == "debut" else (max(valeurs) < 14)
+        # Un joker/2 peut représenter n'importe quelle valeur manquante,
+        # tant qu'elle reste dans la plage 1 (As bas) à 14 (As haut).
+        return 1 <= v_attendue <= 14
 
     couleur_ref = next((c.couleur for c in groupe_existant if c.valeur not in (0, 2)), None)
     if couleur_ref is not None and nouvelle_carte.couleur != couleur_ref:
         return False
 
-    valeurs = _valeurs_effectives(groupe_existant)
-    if not valeurs:
-        return False
-
-    if position == "debut":
-        return nouvelle_carte.valeur == min(valeurs) - 1
-
-    if nouvelle_carte.valeur == max(valeurs) + 1:
+    if nouvelle_carte.valeur == v_attendue:
         return True
-    if max(valeurs) == 13 and nouvelle_carte.valeur == 1:
+    if v_attendue == 14 and nouvelle_carte.valeur == 1:
         return True  # As haut après un Roi
     return False
 

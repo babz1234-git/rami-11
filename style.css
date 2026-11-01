@@ -35,6 +35,13 @@
 html, body{
   height: 100%;
   margin: 0;
+  /* AJOUT : empêche le zoom par double-tap sur mobile/tablette (Android et
+     iOS). "manipulation" dit au navigateur de ne considérer les gestes
+     tactiles que pour le défilement et le pincement-zoom continu — le
+     double-tap-pour-zoomer (un geste "discret") est donc désactivé, sans
+     rien changer au défilement normal ni au tap simple sur les boutons et
+     les cartes. */
+  touch-action: manipulation;
 }
 
 body{
@@ -339,15 +346,38 @@ button{ font-family: inherit; }
   min-height: 220px;
   padding: 16px;
   display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  gap: 14px;
+  flex-direction: column;
+  gap: 16px;
 }
 .tapis:empty::before{
   content: "La table est vide pour l'instant.";
   color: var(--ivoire-mate);
   font-style: italic;
 }
+
+/* AJOUT : une "zone" par joueur qui s'est étalé, pour voir d'un coup d'œil
+   qui a posé quoi plutôt qu'une simple rangée de groupes indifférenciés. */
+.zone-etalement{
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 10px;
+  padding: 10px 10px 12px;
+  background: rgba(0,0,0,.1);
+}
+.zone-etalement__titre{
+  font-family: var(--police-titre);
+  font-weight: 600;
+  font-size: .85rem;
+  letter-spacing: .02em;
+  color: var(--or-500);
+  margin-bottom: 8px;
+}
+.zone-etalement__groupes{
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 14px;
+}
+
 .groupe-tapis{
   background: rgba(0,0,0,.18);
   border-radius: 10px;

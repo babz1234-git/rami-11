@@ -317,3 +317,65 @@ précisément le changement qu'on vient de faire.
   du serveur efface les parties en cours.
 - Testé jusqu'à 6 joueurs par salon (`MAX_JOUEURS` dans `server.py`,
   modifiable).
+
+## 10. Corrections du 1er novembre (4e passe de bugs remontés en jouant)
+
+**1. Affichage en "quinconce" d'un brelan : les jokers en trop se collaient
+entre eux.**
+L'algorithme qui alterne cartes réelles/jokers à l'affichage (pour qu'on ne
+voie jamais deux jokers côte à côte) marchait tant qu'il y avait autant de
+jokers que de cartes réelles. Dès qu'il y en avait plus (cas autorisé par
+les règles, jusqu'à "nombre de réelles + 1"), les jokers en excédent étaient
+simplement empilés à la fin, donc collés les uns aux autres — visuellement
+trompeur puisque la règle l'interdit justement. Remplacé par un algorithme
+qui répartit un seul joker par "emplacement" possible (avant la 1ère carte,
+entre chaque paire, après la dernière), ce qui garantit qu'ils ne se touchent
+jamais, quel que soit leur nombre.
+
+**2. "Rajouter sur la table" : un essai refusé obligeait à resélectionner la
+carte dans la main.**
+En cause : dès l'envoi de la demande au serveur, l'appli effaçait la carte
+"en attente" en supposant que ça allait réussir. Si le serveur refusait
+(mauvais groupe), il fallait resélectionner la carte en main pour pouvoir
+retenter sur un autre groupe — et en plus, l'ancienne carte restait visible
+en surbrillance par pur hasard d'affichage non rafraîchi, ce qui donnait
+l'impression d'un bug de synchronisation. La carte reste maintenant "en
+attente" jusqu'à ce que le serveur confirme vraiment le rajout (elle a
+disparu de la main) : un essai refusé sur un groupe permet de retenter
+directement sur un autre, sans rien resélectionner.
+
+**3. Zoom par double-tap sur mobile/tablette.**
+Ajout de `touch-action: manipulation` en CSS (qui désactive spécifiquement
+le double-tap-pour-zoomer tout en laissant le défilement et le tap simple
+intacts) et de `user-scalable=no` dans la balise meta viewport, en
+complément de la limite `maximum-scale=1` déjà présente.
+
+**4. Le tapis ne montrait pas qui avait étalé quoi.**
+`self.tapis` ne retenait jusqu'ici que les cartes de chaque groupe, pas qui
+l'avait posé. Chaque groupe mémorise maintenant son propriétaire
+(`{"proprietaire": ..., "cartes": [...]}`), et la table affiche désormais une
+"zone" distincte par joueur étalé ("Ton étalage", "Étalage de Mamie", etc.)
+au lieu d'une rangée indifférenciée de groupes. Pour rappel, n'importe quel
+joueur étalé peut toujours rajouter une carte sur le groupe de n'importe qui
+d'autre (c'est le principe du jeu) — seul l'affichage change, pas les
+règles.
+
+**5. Une carte réelle ne pouvait pas prolonger une suite si le bord était
+déjà un joker.**
+Celui-ci touchait directement au moteur. Exemple concret qui le déclenchait :
+un groupe `2♠(joker), 3♦, Joker, 5♦, Joker` posé sur la table (donc
+représentant 2-3-4-5-6 de Carreau) refusait l'As de Carreau en tête, alors
+que c'est parfaitement valide (1 avant le 2). La fonction qui vérifie les
+prolongations avait une règle trop large : "aucune carte ne peut prolonger
+un bord déjà occupé par un joker", alors que la vraie règle est "un JOKER ne
+peut pas se retrouver à côté d'un AUTRE joker" — une carte réelle, elle, n'a
+aucun problème à se poser juste à côté d'un joker. J'ai aussi dû revoir le
+calcul de "quelle valeur la carte suivante doit avoir" : il ne regardait que
+les cartes réelles du groupe et ignorait où se trouvaient les jokers, ce qui
+donnait la mauvaise valeur attendue dès qu'un joker se trouvait plus à
+l'extérieur qu'une carte réelle (exactement le cas de l'exemple ci-dessus).
+
+Comme pour les passes précédentes, j'ai rejoué tous les cas déjà corrigés
+avant (9 avant Valet-Dame-Roi-As, 2e joker après Joker-Valet-Dame-Roi, 8
+bloqué après 5-6-7-joker, brelans avec jokers, etc.) pour m'assurer qu'aucun
+d'eux n'a été cassé par cette correction.

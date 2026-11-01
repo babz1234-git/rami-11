@@ -142,11 +142,22 @@ function ordonnerPourAffichage(cartes) {
   const wilds = cartes.filter((c) => c.joker);
   if (wilds.length === 0) return cartes;
 
+  // CORRECTION : l'ancien algorithme alternait "une réelle, un joker" en
+  // boucle puis, une fois les cartes réelles épuisées, empilait TOUS les
+  // jokers restants d'un coup — dès qu'il y avait plus de jokers que de
+  // cartes réelles (cas limite autorisé par les règles), les derniers se
+  // retrouvaient côte à côte, ce que le jeu interdit justement. Avec R
+  // cartes réelles il y a R+1 "emplacements" possibles pour un joker (avant
+  // la 1ère, entre chaque paire, après la dernière) ; comme il ne peut
+  // jamais y en avoir deux dans le même emplacement, on les distribue un par
+  // un dans ces emplacements (en partant du premier) : deux jokers placés
+  // ainsi sont toujours séparés par au moins une carte réelle.
   const resultat = [];
-  let iR = 0, iW = 0;
-  while (iR < reelles.length || iW < wilds.length) {
-    if (iR < reelles.length) resultat.push(reelles[iR++]);
-    if (iW < wilds.length) resultat.push(wilds[iW++]);
+  let iW = 0;
+  if (iW < wilds.length) resultat.push(wilds[iW++]); // emplacement "avant la 1ère"
+  for (const reelle of reelles) {
+    resultat.push(reelle);
+    if (iW < wilds.length) resultat.push(wilds[iW++]); // emplacement "après cette carte"
   }
   return resultat;
 }
@@ -331,6 +342,15 @@ socket.on("etat_partie", (etat) => {
     carteSelectionneeMain = null;
   }
 
+  // CORRECTION : on n'efface "carteEnAttenteRajouter" qu'ici, une fois que
+  // le serveur a confirmé le rajout (la carte a disparu de la main) — voir
+  // tenterRajout() pour le détail du bug corrigé (il ne fallait plus la
+  // vider dès l'envoi, sinon un essai refusé sur un groupe obligeait à
+  // resélectionner la carte en main pour retenter sur un autre groupe).
+  if (carteEnAttenteRajouter && !etat.ma_main.some((c) => c.id === carteEnAttenteRajouter)) {
+    carteEnAttenteRajouter = null;
+  }
+
   rendreTable(etat);
 
   if (modaleRajouterOuverte) rendreModaleRajouter();
@@ -400,14 +420,34 @@ function rendreTable(etat) {
   el("btn-piocher-pioche").disabled = !peutPiocher;
   el("btn-piocher-defausse").disabled = !peutPiocher || !etat.defausse_top;
 
-  // Tapis
+  // Tapis — AJOUT : regroupé par "zone" de joueur (demande explicite : on
+  // ne voyait pas facilement qui avait étalé quoi, une simple rangée de
+  // groupes sans distinction). On garde l'ordre des joueurs de la partie et
+  // on n'affiche une zone que pour ceux qui ont au moins un groupe posé.
   const tapisDiv = el("jeu-tapis");
   tapisDiv.innerHTML = "";
-  etat.tapis.forEach((groupe) => {
-    const groupeDiv = document.createElement("div");
-    groupeDiv.className = "groupe-tapis";
-    ordonnerPourAffichage(groupe).forEach((carte) => groupeDiv.appendChild(creerElementCarte(carte, { miniature: true })));
-    tapisDiv.appendChild(groupeDiv);
+  etat.joueurs.forEach((j) => {
+    const groupesDuJoueur = etat.tapis.filter((g) => g.proprietaire === j.nom);
+    if (groupesDuJoueur.length === 0) return;
+
+    const zoneDiv = document.createElement("div");
+    zoneDiv.className = "zone-etalement";
+
+    const titre = document.createElement("div");
+    titre.className = "zone-etalement__titre";
+    titre.textContent = j.nom === etat.mon_pseudo ? "Ton étalage" : `Étalage de ${j.nom}`;
+    zoneDiv.appendChild(titre);
+
+    const groupesDiv = document.createElement("div");
+    groupesDiv.className = "zone-etalement__groupes";
+    groupesDuJoueur.forEach((groupe) => {
+      const groupeDiv = document.createElement("div");
+      groupeDiv.className = "groupe-tapis";
+      ordonnerPourAffichage(groupe.cartes).forEach((carte) => groupeDiv.appendChild(creerElementCarte(carte, { miniature: true })));
+      groupesDiv.appendChild(groupeDiv);
+    });
+    zoneDiv.appendChild(groupesDiv);
+    tapisDiv.appendChild(zoneDiv);
   });
 
   // Journal
@@ -694,26 +734,42 @@ function tenterRajout(carteId, indexGroupe) {
   const groupe = dernierEtat.tapis[indexGroupe];
   if (!carteData || !groupe) return;
 
-  if (carteData.joker && groupe.length > 0 && !estGroupeBrelan(groupe)) {
+  if (carteData.joker && groupe.cartes.length > 0 && !estGroupeBrelan(groupe.cartes)) {
     choixPositionRajout = { carteId, indexGroupe };
     carteEnAttenteRajouter = null;
     rendreModaleRajouter();
     return;
   }
 
+  // CORRECTION : on NE vide PLUS carteEnAttenteRajouter ici. Le serveur peut
+  // très bien refuser ce rajout (groupe incompatible) — le vider tout de
+  // suite forçait à resélectionner la carte en main pour pouvoir retenter sur
+  // un autre groupe, et laissait en plus un surlignage périmé (la carte
+  // paraissait toujours sélectionnée alors que l'état interne disait "aucune
+  // carte choisie"). Elle n'est désormais effacée que lorsque le serveur
+  // confirme le rajout — voir socket.on("etat_partie", ...) plus haut.
+  el("rajouter-erreur").textContent = "";
   socket.emit("rajouter", { code: monCode, carte_id: carteId, index_groupe: indexGroupe });
-  carteEnAttenteRajouter = null;
+  rendreModaleRajouter();
 }
 
 el("btn-position-debut").addEventListener("click", () => {
   if (!choixPositionRajout) return;
+  el("rajouter-erreur").textContent = "";
   socket.emit("rajouter", { code: monCode, carte_id: choixPositionRajout.carteId, index_groupe: choixPositionRajout.indexGroupe, position: "debut" });
+  // CORRECTION : même principe que tenterRajout — on remet la carte "en
+  // attente" (plutôt que de tout effacer) tant que le serveur n'a pas
+  // confirmé, pour pouvoir retenter ailleurs sans la resélectionner si ce
+  // choix de position est refusé.
+  carteEnAttenteRajouter = choixPositionRajout.carteId;
   choixPositionRajout = null;
   rendreModaleRajouter();
 });
 el("btn-position-fin").addEventListener("click", () => {
   if (!choixPositionRajout) return;
+  el("rajouter-erreur").textContent = "";
   socket.emit("rajouter", { code: monCode, carte_id: choixPositionRajout.carteId, index_groupe: choixPositionRajout.indexGroupe, position: "fin" });
+  carteEnAttenteRajouter = choixPositionRajout.carteId;
   choixPositionRajout = null;
   rendreModaleRajouter();
 });
@@ -735,18 +791,44 @@ function rendreModaleRajouter() {
     p.textContent = "Aucun groupe sur la table pour l'instant.";
     tapisDiv.appendChild(p);
   }
-  dernierEtat.tapis.forEach((groupe, index) => {
-    const boite = document.createElement("div");
-    boite.className = "groupe-tapis cliquable";
-    ordonnerPourAffichage(groupe).forEach((carte) => boite.appendChild(creerElementCarte(carte, { miniature: true })));
-    boite.addEventListener("click", () => {
-      if (!carteEnAttenteRajouter) {
-        el("rajouter-erreur").textContent = "Touche d'abord une carte de ta main.";
-        return;
-      }
-      tenterRajout(carteEnAttenteRajouter, index);
+
+  // AJOUT : même regroupement par zone de joueur que sur la table principale
+  // (plus facile de repérer à qui appartient chaque groupe avant d'y ajouter
+  // une carte). On garde toujours l'INDEX D'ORIGINE dans dernierEtat.tapis —
+  // celui que le serveur attend — via un attribut data-index plutôt qu'une
+  // position dans le DOM, pour que le glisser-déposer reste correct même une
+  // fois les groupes répartis dans des zones imbriquées.
+  dernierEtat.joueurs.forEach((j) => {
+    const groupesDuJoueur = dernierEtat.tapis
+      .map((groupe, index) => ({ groupe, index }))
+      .filter(({ groupe }) => groupe.proprietaire === j.nom);
+    if (groupesDuJoueur.length === 0) return;
+
+    const zoneDiv = document.createElement("div");
+    zoneDiv.className = "zone-etalement";
+    const titre = document.createElement("div");
+    titre.className = "zone-etalement__titre";
+    titre.textContent = j.nom === dernierEtat.mon_pseudo ? "Ton étalage" : `Étalage de ${j.nom}`;
+    zoneDiv.appendChild(titre);
+
+    const groupesDiv = document.createElement("div");
+    groupesDiv.className = "zone-etalement__groupes";
+    groupesDuJoueur.forEach(({ groupe, index }) => {
+      const boite = document.createElement("div");
+      boite.className = "groupe-tapis cliquable";
+      boite.dataset.index = index;
+      ordonnerPourAffichage(groupe.cartes).forEach((carte) => boite.appendChild(creerElementCarte(carte, { miniature: true })));
+      boite.addEventListener("click", () => {
+        if (!carteEnAttenteRajouter) {
+          el("rajouter-erreur").textContent = "Touche d'abord une carte de ta main.";
+          return;
+        }
+        tenterRajout(carteEnAttenteRajouter, index);
+      });
+      groupesDiv.appendChild(boite);
     });
-    tapisDiv.appendChild(boite);
+    zoneDiv.appendChild(groupesDiv);
+    tapisDiv.appendChild(zoneDiv);
   });
 
   const mainDiv = el("rajouter-main");
@@ -767,8 +849,12 @@ function rendreModaleRajouter() {
         detruireFantome(carteEl);
         const groupeCible = trouverCibleSous(evt, "#rajouter-tapis .groupe-tapis.cliquable");
         if (groupeCible) {
-          const index = Array.from(el("rajouter-tapis").children).indexOf(groupeCible);
-          if (index !== -1) {
+          // CORRECTION : les groupes sont maintenant imbriqués dans des
+          // zones par joueur, donc leur position parmi les enfants directs
+          // de #rajouter-tapis ne correspond plus à l'index côté serveur —
+          // on lit l'index d'origine posé sur chaque boîte (voir plus haut).
+          const index = Number(groupeCible.dataset.index);
+          if (!Number.isNaN(index)) {
             tenterRajout(carte.id, index);
           }
         } else {
