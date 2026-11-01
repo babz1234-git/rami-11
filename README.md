@@ -379,3 +379,87 @@ Comme pour les passes précédentes, j'ai rejoué tous les cas déjà corrigés
 avant (9 avant Valet-Dame-Roi-As, 2e joker après Joker-Valet-Dame-Roi, 8
 bloqué après 5-6-7-joker, brelans avec jokers, etc.) pour m'assurer qu'aucun
 d'eux n'a été cassé par cette correction.
+
+## 11. Corrections du 1er novembre (5e passe — messages d'erreur et affichage)
+
+**1. Dans la fenêtre "S'étaler", les zones s'appelaient juste "Groupe 1" /
+"Groupe 2" sans dire ce qu'elles attendaient.**
+Chaque zone affiche maintenant le type de combinaison attendu à cet
+endroit-là, tiré directement de la structure du contrat en cours : "Suite (0
+/ 4 cartes)", "Brelan (0 / 3 cartes)", etc. Le compteur avance au fur et à
+mesure que tu glisses des cartes dedans, donc tu vois tout de suite combien
+il en manque.
+
+**2. Un étalement refusé ne disait pas pourquoi — exemple du groupe de 5
+cartes contre un contrat "suite de 4".**
+Le jeu se contentait de refuser sans explication, ce qui forçait à deviner
+par essais-erreurs (comme tu l'as fait en retirant une carte). Il y a
+maintenant une fonction de diagnostic qui rejoue la même vérification que le
+moteur mais, au lieu de répondre juste "oui/non", explique précisément ce qui
+cloche : la bonne taille attendue, la bonne couleur attendue, la valeur de
+brelan qui ne correspond pas, trop de jokers, etc. Message concret dans ce
+cas précis : *"Groupe 2 (brelan attendu) : il faut exactement 3 cartes pour
+ce brelan (tu en as 2)."*
+
+**3. Demande générale : un message clair pour CHAQUE refus possible, à
+l'étalement comme au rajout.**
+C'est le plus gros morceau de cette passe. J'ai repris une par une toutes les
+raisons pour lesquelles le jeu peut refuser une action et écrit un message
+dédié pour chacune — déjà étalé, pas assez de cartes restantes en main,
+mauvaise couleur, mauvaise valeur de brelan, trop de jokers dans un brelan,
+joker collé à un autre joker, carte hors de la plage 1-14, sélection
+invalide, carte "morte" (déjà jouée), étalement incomplet par rapport au
+contrat, etc. Ces messages s'affichent maintenant directement dans
+l'interface (fenêtres "S'étaler" et "Rajouter") au lieu du message générique
+d'avant. Comme tu l'as demandé, ça doit aussi t'aider à comprendre les règles
+en jouant, pas seulement à voir qu'une action a échoué.
+
+**4 et 6. Impossible d'ajouter l'As de Carreau à un groupe 2(réel)-2(joker)
+avant le 2, alors que ça devrait marcher.**
+Vérifié à nouveau précisément sur ce cas (2 réel + 2 joker ensemble, puis
+ajout de l'As avant) : c'est bien déjà réglé par la correction du moteur de
+la passe précédente (celle sur les prolongations de suite). Rejoué avec un
+test automatisé qui reproduit exactement ta configuration (As + 2 réel + 2
+joker + Joker) : l'ajout fonctionne. Si ça coince encore chez toi sur une
+configuration précise, dis-moi exactement quelles cartes sont dans le groupe
+et laquelle tu essaies d'ajouter, avec le nouveau message d'erreur affiché —
+il devrait maintenant dire précisément pourquoi si ça refuse encore.
+
+**5. Rajouter un joker : le jeu demandait toujours "avant ou après ?" même
+quand une seule réponse (ou aucune) était possible.**
+Avant, cette question s'affichait systématiquement dès qu'on essayait
+d'ajouter un joker sur une suite, même quand un seul côté — ou carrément
+aucun des deux — pouvait réellement accueillir la carte. Le jeu vérifie
+maintenant les deux positions avant d'afficher quoi que ce soit : si aucune
+des deux n'est possible, le message d'erreur s'affiche directement (plus de
+question inutile) ; si une seule est possible, le joker est ajouté
+automatiquement à cet endroit sans rien demander ; la question "avant ou
+après ?" ne s'affiche plus que dans le seul cas où les deux côtés
+fonctionnent réellement et où il faut donc vraiment choisir.
+
+**7. En réorganisant sa main avec les flèches, déplacer une carte "trop
+vite" (bouclage en bout de main) l'échangeait avec la carte à l'autre bout
+au lieu de la glisser normalement à côté de sa voisine.**
+Le code déplaçait la carte en l'échangeant directement avec celle occupant
+la position de destination — correct pour un déplacement d'un cran classique,
+mais faux dès qu'il fallait "boucler" d'un bout de la main à l'autre : au
+lieu de glisser toute la main d'un cran (comme une rotation), ça faisait un
+simple échange des deux cartes aux extrémités. Remplacé par un vrai
+déplacement : la carte est retirée de sa position puis réinsérée à la
+position d'arrivée, ce qui décale naturellement toutes les cartes entre les
+deux d'un cran — exactement le comportement "elle se replace derrière sa
+voisine" que tu décrivais.
+
+**8. À propos de "Mamie" / noms des joueurs dans les zones d'étalage.**
+Vérification faite : ce n'était pas un bug, et il n'y avait rien à changer
+dans le code. "Mamie" n'apparaît nulle part en dur dans `app.js` — c'était
+seulement un exemple que j'utilisais dans mes explications. Le jeu affiche
+déjà le vrai pseudo de chaque joueur dans le titre de sa zone ("Étalage de
+Mamie" si elle s'appelle Mamie, "Étalage de Macron" si le joueur 1 s'appelle
+Macron, etc.) — testé pour confirmer avec un joueur fictif nommé "Macron" :
+la zone s'est bien appelée "Étalage de Macron".
+
+Toutes les corrections ci-dessus ont été vérifiées avec des tests
+automatisés (moteur de jeu + simulation complète dans un navigateur), et les
+anciens scénarios de bugs des passes précédentes ont été rejoués pour
+confirmer qu'aucun n'a été cassé par ces changements.

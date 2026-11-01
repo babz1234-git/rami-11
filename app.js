@@ -534,7 +534,16 @@ function deplacerCarteSelectionnee(direction) {
   let nouvelIndex = index + direction;
   if (nouvelIndex < 0) nouvelIndex = n - 1;
   if (nouvelIndex >= n) nouvelIndex = 0;
-  [ordreMainIds[index], ordreMainIds[nouvelIndex]] = [ordreMainIds[nouvelIndex], ordreMainIds[index]];
+  // CORRECTION : on RETIRE la carte puis on la RÉINSÈRE à sa nouvelle place,
+  // au lieu d'échanger juste son contenu avec la case d'arrivée. Pour un
+  // déplacement normal (pas de bouclage), les deux donnent le même résultat
+  // — mais au bouclage (dernière carte -> première, ou l'inverse), un simple
+  // échange de contenu faisait sauter la carte tout à l'autre bout EN TROC
+  // avec celle qui s'y trouvait déjà, plutôt que de simplement glisser d'un
+  // cran vers sa voisine circulaire (ce qui décale alors toutes les cartes
+  // intermédiaires d'un cran, comme n'importe quelle liste réordonnable).
+  const [carte] = ordreMainIds.splice(index, 1);
+  ordreMainIds.splice(nouvelIndex, 0, carte);
   if (dernierEtat) rendreTable(dernierEtat);
 }
 el("btn-carte-gauche").addEventListener("click", () => deplacerCarteSelectionnee(-1));
@@ -581,9 +590,16 @@ function rendreModaleEtaler() {
   const conteneurGroupes = el("etaler-groupes");
   conteneurGroupes.innerHTML = "";
   groupesEtalement.forEach((groupeIds, index) => {
+    // AJOUT : titre de zone basé sur le CONTENU du contrat ("Suite", "Brelan")
+    // plutôt qu'un numéro générique — et affiche la taille attendue pour que
+    // ce soit visible d'un coup d'œil si un groupe a trop ou pas assez de
+    // cartes (demande explicite après une confusion sur ce point).
+    const composant = dernierEtat.contrat_structure[index] || [];
+    const typeComposant = composant[0] === "suite" ? "Suite" : "Brelan";
+    const tailleVoulue = composant[1];
     const boite = document.createElement("div");
     boite.className = "groupe-etalement cliquable";
-    boite.innerHTML = `<div class="groupe-etalement__titre">Groupe ${index + 1} (${groupeIds.length} carte${groupeIds.length > 1 ? "s" : ""})</div>`;
+    boite.innerHTML = `<div class="groupe-etalement__titre">${typeComposant} (${groupeIds.length} / ${tailleVoulue} carte${tailleVoulue > 1 ? "s" : ""})</div>`;
     const zoneCartes = document.createElement("div");
     zoneCartes.className = "groupe-etalement__cartes";
 
@@ -734,10 +750,15 @@ function tenterRajout(carteId, indexGroupe) {
   const groupe = dernierEtat.tapis[indexGroupe];
   if (!carteData || !groupe) return;
 
+  el("rajouter-erreur").textContent = "";
+
   if (carteData.joker && groupe.cartes.length > 0 && !estGroupeBrelan(groupe.cartes)) {
-    choixPositionRajout = { carteId, indexGroupe };
-    carteEnAttenteRajouter = null;
-    rendreModaleRajouter();
+    // CORRECTION : on ne propose plus systématiquement le choix "avant /
+    // après" — on demande d'abord au serveur, sans rien modifier, si chaque
+    // côté est réellement possible. S'il n'y a nulle part où ce joker peut
+    // aller, inutile de poser la question : le message d'erreur s'affiche
+    // directement (voir socket.on("positions_rajout", ...) plus bas).
+    socket.emit("verifier_positions_rajout", { code: monCode, carte_id: carteId, index_groupe: indexGroupe });
     return;
   }
 
@@ -748,10 +769,28 @@ function tenterRajout(carteId, indexGroupe) {
   // paraissait toujours sélectionnée alors que l'état interne disait "aucune
   // carte choisie"). Elle n'est désormais effacée que lorsque le serveur
   // confirme le rajout — voir socket.on("etat_partie", ...) plus haut.
-  el("rajouter-erreur").textContent = "";
   socket.emit("rajouter", { code: monCode, carte_id: carteId, index_groupe: indexGroupe });
   rendreModaleRajouter();
 }
+
+socket.on("positions_rajout", (data) => {
+  const { carte_id, index_groupe, debut, fin, message } = data;
+  if (debut && fin) {
+    // Les deux côtés fonctionnent vraiment : là, la question a un sens.
+    choixPositionRajout = { carteId: carte_id, indexGroupe: index_groupe };
+    carteEnAttenteRajouter = null;
+  } else if (debut || fin) {
+    // Un seul côté fonctionne : pas besoin de demander, on l'applique direct.
+    socket.emit("rajouter", { code: monCode, carte_id, index_groupe, position: debut ? "debut" : "fin" });
+    carteEnAttenteRajouter = carte_id;
+  } else {
+    // Aucun des deux côtés ne fonctionne : message précis tout de suite, la
+    // carte reste sélectionnée pour pouvoir retenter sur un autre groupe.
+    el("rajouter-erreur").textContent = message || "Cette carte ne peut pas être ajoutée à ce groupe.";
+    carteEnAttenteRajouter = carte_id;
+  }
+  rendreModaleRajouter();
+});
 
 el("btn-position-debut").addEventListener("click", () => {
   if (!choixPositionRajout) return;

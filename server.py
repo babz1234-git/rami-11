@@ -312,12 +312,20 @@ def on_etaler(data):
             groupe.append(carte)
         groupes_cartes.append(groupe)
 
+    # AJOUT : accepte n'importe quel ordre des groupes proposés (l'UI
+    # étiquette maintenant chaque zone par son type, donc ça n'arrive presque
+    # plus, mais ça reste une sécurité peu coûteuse). Si AUCUN arrangement ne
+    # correspond, le message d'erreur diagnostique les groupes dans l'ordre
+    # où le joueur les voit à l'écran — c'est le plus utile pour comprendre
+    # ce qui cloche.
     arrangement = ge.verifier_contrat_toute_permutation(partie.niveau_actuel, groupes_cartes)
     if arrangement is None:
-        return erreur("Cet étalement ne correspond pas au contrat demandé.")
+        raison = ge.diagnostiquer_etalement(partie.niveau_actuel, groupes_cartes)
+        return erreur(raison or "Cet étalement ne correspond pas au contrat demandé.")
 
-    if not partie.action_etaler(arrangement):
-        return erreur("Étalement refusé.")
+    ok, message = partie.action_etaler(arrangement)
+    if not ok:
+        return erreur(message or "Étalement refusé.")
     diffuser_etat(salle["code"])
 
 
@@ -341,9 +349,46 @@ def on_rajouter(data):
     if index_carte is None or index_groupe is None:
         return erreur("Sélection invalide.")
 
-    if not partie.action_rajouter(index_carte, int(index_groupe), position):
-        return erreur("Cette carte ne peut pas être ajoutée à ce groupe.")
+    ok, message = partie.action_rajouter(index_carte, int(index_groupe), position)
+    if not ok:
+        return erreur(message or "Cette carte ne peut pas être ajoutée à ce groupe.")
     diffuser_etat(salle["code"])
+
+
+@socketio.on("verifier_positions_rajout")
+def on_verifier_positions_rajout(data):
+    # AJOUT : vérification "à blanc" (ne change rien à la partie) pour qu'un
+    # joker ne propose le choix "avant / après" que lorsqu'au moins l'une des
+    # deux options fonctionne réellement — sinon l'interface affiche
+    # directement l'explication plutôt que de poser une question inutile.
+    contexte = _contexte_action(data)
+    if not contexte:
+        return
+    salle, partie, pseudo = contexte
+
+    joueur_actuel = partie.joueurs[partie.joueur_actif]
+    carte_id = (data or {}).get("carte_id")
+    index_groupe = (data or {}).get("index_groupe")
+    index_carte = next(
+        (i for i, c in enumerate(joueur_actuel.main) if c.id == carte_id), None
+    )
+    if index_carte is None or index_groupe is None:
+        return erreur("Sélection invalide.")
+
+    positions = partie.positions_rajout_possibles(index_carte, int(index_groupe))
+    message = None
+    if not positions["debut"] and not positions["fin"]:
+        carte = joueur_actuel.main[index_carte]
+        groupe_cible = partie.tapis[int(index_groupe)]["cartes"]
+        raison_debut = ge.diagnostiquer_rajout_joker(groupe_cible, carte, "debut")
+        raison_fin = ge.diagnostiquer_rajout_joker(groupe_cible, carte, "fin")
+        if raison_debut == raison_fin or not raison_fin:
+            message = raison_debut
+        elif not raison_debut:
+            message = raison_fin
+        else:
+            message = f"{raison_debut} {raison_fin}"
+    emit("positions_rajout", {"carte_id": carte_id, "index_groupe": index_groupe, **positions, "message": message})
 
 
 @socketio.on("defausser")
@@ -384,8 +429,9 @@ def on_finir_sec(data):
     if not partie.a_pioche_ce_tour:
         return erreur("Pioche d'abord une carte avant de tenter de finir.")
 
-    if not partie.action_finir_sec():
-        return erreur("Ta main ne se répartit pas exactement selon le contrat : impossible de finir maintenant.")
+    ok, message = partie.action_finir_sec()
+    if not ok:
+        return erreur(message or "Ta main ne se répartit pas exactement selon le contrat : impossible de finir maintenant.")
     diffuser_etat(salle["code"])
 
 

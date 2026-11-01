@@ -227,11 +227,14 @@ class Partie:
         return False
 
     def action_etaler(self, groupes_proposes):
+        # CORRECTION : renvoie désormais (succes, message) au lieu d'un
+        # simple booléen, pour que le joueur sache PRÉCISÉMENT pourquoi un
+        # étalement est refusé au lieu d'un message générique à chaque fois.
         joueur_actuel = self.joueurs[self.joueur_actif]
 
         if joueur_actuel.est_etale:
             print(f"{joueur_actuel.nom} est déjà étalé !")
-            return False
+            return False, "Tu es déjà étalé : impossible de le refaire une seconde fois dans la même manche."
 
         if verifier_contrat(self.niveau_actuel, groupes_proposes):
             # CORRECTION : il faut toujours garder au moins une carte "morte"
@@ -240,7 +243,7 @@ class Partie:
             nb_cartes_utilisees = sum(len(groupe) for groupe in groupes_proposes)
             if nb_cartes_utilisees >= len(joueur_actuel.main):
                 print(f"{joueur_actuel.nom} doit garder au moins une carte à défausser pour terminer.")
-                return False
+                return False, "Il faut garder au moins une carte en main pour pouvoir la défausser normalement : ton étalement utilise toute ta main."
 
             print(f"Félicitations {joueur_actuel.nom} ! Contrat validé.")
             joueur_actuel.est_etale = True
@@ -255,32 +258,37 @@ class Partie:
             for groupe in groupes_proposes:
                 self.tapis.append({"proprietaire": joueur_actuel.nom, "cartes": groupe})
             self.log(f"{joueur_actuel.nom} a validé son contrat et s'est étalé !")
-            return True
+            return True, None
         else:
             print(f"Échec ! Le contrat proposé par {joueur_actuel.nom} est invalide.")
-            return False
+            raison = diagnostiquer_etalement(self.niveau_actuel, groupes_proposes)
+            return False, raison or "Cet étalement ne correspond pas au contrat demandé."
 
     def action_rajouter(self, index_carte_main, index_groupe_tapis, position="fin"):
+        # CORRECTION : renvoie désormais (succes, message) au lieu d'un
+        # simple booléen — message explique PRÉCISÉMENT pourquoi un rajout
+        # échoue (couleur, valeur attendue, joker à côté d'un joker, etc.)
+        # au lieu du générique "cette carte ne peut pas être ajoutée".
         joueur_actuel = self.joueurs[self.joueur_actif]
 
         if not joueur_actuel.est_etale:
             print(f"Action refusée : {joueur_actuel.nom} doit s'étaler avant de faire un rajout.")
-            return False
+            return False, "Tu dois d'abord t'étaler toi-même avant de pouvoir rajouter une carte sur la table."
 
         # AJOUT : garde-fous sur les index (le code original suppose des index
         # toujours valides ; en ligne, mieux vaut ne jamais faire confiance
         # aveuglément à ce qu'envoie un navigateur).
         if not (0 <= index_carte_main < len(joueur_actuel.main)):
-            return False
+            return False, "Cette carte n'est plus dans ta main."
         if not (0 <= index_groupe_tapis < len(self.tapis)):
-            return False
+            return False, "Ce groupe n'existe plus sur la table."
 
         # CORRECTION : même principe que pour action_etaler — il faut
         # toujours garder au moins une carte "morte" à défausser normalement.
         # Un rajout ne doit jamais être LA carte qui vide la main à 0.
         if len(joueur_actuel.main) <= 1:
             print(f"{joueur_actuel.nom} doit garder sa dernière carte pour la défausser.")
-            return False
+            return False, "Il faut garder au moins une carte en main pour la défausser normalement : impossible de rajouter ta toute dernière carte."
 
         carte = joueur_actuel.main[index_carte_main]
         groupe_cible = self.tapis[index_groupe_tapis]["cartes"]
@@ -326,10 +334,34 @@ class Partie:
                 self.tapis[index_groupe_tapis]["cartes"].append(carte_jetee)
             print(f"Rajout réussi ! {carte} a été ajoutée.")
             self.log(f"{joueur_actuel.nom} a rajouté {carte_jetee} sur le tapis.")
-            return True
+            return True, None
         else:
             print("Rajout impossible : la carte ne rentre pas dans ce groupe.")
-            return False
+            if carte.valeur in (0, 2) and not _groupe_est_brelan(groupe_cible):
+                raison = diagnostiquer_rajout_joker(groupe_cible, carte, position)
+            else:
+                raison = diagnostiquer_rajout_carte_reelle(groupe_cible, carte)
+            return False, raison or "Cette carte ne peut pas être ajoutée à ce groupe."
+
+    def positions_rajout_possibles(self, index_carte_main, index_groupe_tapis):
+        # AJOUT : vérification "à blanc" (ne modifie rien) utilisée par le
+        # client avant d'afficher le choix "avant / après" pour un joker sur
+        # une suite — pour ne JAMAIS poser la question si aucune des deux
+        # options ne peut de toute façon fonctionner (demande explicite :
+        # "ne pas demander la question avant/après puisqu'il ne peut aller
+        # nulle part, mettre le message d'erreur directement").
+        joueur_actuel = self.joueurs[self.joueur_actif]
+        if not (0 <= index_carte_main < len(joueur_actuel.main)):
+            return {"debut": False, "fin": False}
+        if not (0 <= index_groupe_tapis < len(self.tapis)):
+            return {"debut": False, "fin": False}
+
+        carte = joueur_actuel.main[index_carte_main]
+        groupe_cible = self.tapis[index_groupe_tapis]["cartes"]
+        return {
+            "debut": _extension_suite_ok(groupe_cible, carte, "debut"),
+            "fin": _extension_suite_ok(groupe_cible, carte, "fin"),
+        }
 
     def action_defausser(self, index_carte):
         joueur_actuel = self.joueurs[self.joueur_actif]
@@ -362,19 +394,24 @@ class Partie:
 
         if joueur_actuel.est_etale:
             print(f"{joueur_actuel.nom} est déjà étalé, il ne peut pas 'finir sec'.")
-            return False
+            return False, "Tu es déjà étalé : ce coup spécial n'est possible que si tu n'as encore jamais posé de groupe."
 
         arrangement = chercher_partition_complete(joueur_actuel.main, self.niveau_actuel)
         if arrangement is None:
             print(f"La main de {joueur_actuel.nom} ne se répartit pas exactement selon le contrat.")
-            return False
+            return (
+                False,
+                f"Ta main ne se répartit pas exactement selon le contrat demandé "
+                f"({DESCRIPTIONS_CONTRATS.get(self.niveau_actuel, '')}) sans qu'il reste une carte de côté — "
+                f"vérifie qu'aucune carte ne traîne en trop ou qu'il n'en manque pas une pour fermer un groupe.",
+            )
 
         for groupe in arrangement:
             self.tapis.append({"proprietaire": joueur_actuel.nom, "cartes": groupe})
         joueur_actuel.main = []
         self.log(f"{joueur_actuel.nom} retourne toute sa main d'un coup et termine la manche, sans jamais s'être étalé !")
         self.fin_de_mene(joueur_actuel)
-        return True
+        return True, None
 
     def fin_de_mene(self, joueur_gagnant):
         # CORRECTION : c'est l'inverse de ce que j'avais codé — le gagnant de
@@ -660,6 +697,229 @@ def _extension_suite_ok(groupe_existant, nouvelle_carte, position):
     if v_attendue == 14 and nouvelle_carte.valeur == 1:
         return True  # As haut après un Roi
     return False
+
+
+# =========================================================================
+# AJOUT : diagnostics détaillés — ces fonctions ne CHANGENT aucune règle
+# existante, elles expliquent juste en français pourquoi une tentative déjà
+# jugée invalide par les fonctions ci-dessus échoue précisément (demande
+# explicite : "pour chaque erreur possible, un message qui explique pourquoi
+# je refuse"). Elles ne sont appelées qu'APRÈS un échec, jamais pour décider
+# si c'est valide ou non — donc aucun risque de divergence avec les vraies
+# règles.
+# =========================================================================
+
+def _nom_valeur_conceptuelle(v):
+    # La valeur 14 n'existe pour aucune carte réelle : c'est la façon interne
+    # de représenter "l'As utilisé en carte haute, après le Roi".
+    if v == 14:
+        return "As (en carte haute, après le Roi)"
+    return nom_valeur(v)
+
+
+def _diagnostiquer_sequence(valeurs_triees, nb_jokers):
+    """Même calcul que _sequence_valide_depuis_valeurs, mais explique le
+    souci au lieu de renvoyer juste False. Renvoie None si en fait valide
+    (ne devrait pas arriver si on l'appelle après un échec confirmé)."""
+    jokers_restants = nb_jokers
+    for i in range(len(valeurs_triees) - 1):
+        ecart = valeurs_triees[i + 1] - valeurs_triees[i]
+        if ecart == 0:
+            return f"Deux de tes cartes réelles ont la même valeur ({_nom_valeur_conceptuelle(valeurs_triees[i])}) : une suite ne peut pas avoir de doublon."
+        elif ecart == 2:
+            if jokers_restants > 0:
+                jokers_restants -= 1
+            else:
+                return (
+                    f"Il manque une carte entre {_nom_valeur_conceptuelle(valeurs_triees[i])} et "
+                    f"{_nom_valeur_conceptuelle(valeurs_triees[i + 1])}, et tu n'as plus de joker "
+                    f"disponible pour la remplacer."
+                )
+        elif ecart >= 3:
+            return (
+                f"Il manque plus d'une carte entre {_nom_valeur_conceptuelle(valeurs_triees[i])} et "
+                f"{_nom_valeur_conceptuelle(valeurs_triees[i + 1])} : un seul joker ne peut combler "
+                f"qu'un trou d'une seule carte à la fois."
+            )
+
+    if jokers_restants > 1:
+        return (
+            f"Il te reste {jokers_restants} joker(s) de trop pour cette suite : au-delà d'un seul "
+            f"joker en plus du nécessaire, deux d'entre eux se retrouveraient forcément côte à côte."
+        )
+    return None
+
+
+def diagnostiquer_brelan(cartes, taille_voulue):
+    """Explique pourquoi `cartes` ne forme pas un brelan valide de
+    `taille_voulue` cartes. À n'appeler qu'après un échec de brelan_valide."""
+    if len(cartes) != taille_voulue:
+        return f"il faut exactement {taille_voulue} carte{'s' if taille_voulue > 1 else ''} pour ce brelan (tu en as {len(cartes)})."
+
+    jokers = [c for c in cartes if c.valeur in (0, 2)]
+    normales = [c for c in cartes if c.valeur not in (0, 2)]
+
+    if normales:
+        valeurs_distinctes = sorted(set(c.valeur for c in normales))
+        if len(valeurs_distinctes) > 1:
+            exemples = " et ".join(_nom_valeur_conceptuelle(v) for v in valeurs_distinctes)
+            return f"un brelan doit être composé de cartes de même valeur (hors jokers) : tu mélanges {exemples}."
+
+    if len(jokers) > len(normales) + 1:
+        return (
+            f"trop de jokers pour ce brelan : avec {len(normales)} carte{'s' if len(normales) != 1 else ''} "
+            f"réelle{'s' if len(normales) != 1 else ''}, impossible de placer {len(jokers)} joker(s) sans "
+            f"que deux d'entre eux ne se touchent."
+        )
+
+    return None  # ne devrait pas arriver si on appelle ça après un échec confirmé
+
+
+def diagnostiquer_suite(cartes, taille_voulue):
+    """Explique pourquoi `cartes` ne forme pas une suite valide de
+    `taille_voulue` cartes. À n'appeler qu'après un échec de suite_valide."""
+    if len(cartes) != taille_voulue:
+        return f"il faut exactement {taille_voulue} carte{'s' if taille_voulue > 1 else ''} pour cette suite (tu en as {len(cartes)})."
+
+    jokers_purs = [c for c in cartes if c.valeur == 0]
+    deux = [c for c in cartes if c.valeur == 2]
+    autres = [c for c in cartes if c.valeur not in (0, 2)]
+
+    if not autres and not deux:
+        return "une suite a besoin d'au moins une carte réelle pour savoir dans quelle couleur et à quelles valeurs elle se joue."
+
+    meilleure_raison = None
+    couleurs_vues = set()
+    for choix in itertools.product([False, True], repeat=len(deux)):
+        cartes_normales = list(autres)
+        nb_jokers = len(jokers_purs)
+        for utilise_comme_carte_normale, carte in zip(choix, deux):
+            if utilise_comme_carte_normale:
+                cartes_normales.append(carte)
+            else:
+                nb_jokers += 1
+
+        if not cartes_normales:
+            continue
+
+        couleurs = set(c.couleur for c in cartes_normales)
+        if len(couleurs) > 1:
+            couleurs_vues |= couleurs
+            continue
+
+        valeurs = sorted(c.valeur for c in cartes_normales)
+        raison = _diagnostiquer_sequence(valeurs, nb_jokers)
+        if raison is None and 1 in valeurs:
+            valeurs_haut = sorted(14 if v == 1 else v for v in valeurs)
+            raison_haut = _diagnostiquer_sequence(valeurs_haut, nb_jokers)
+            if raison_haut is None:
+                return None  # en fait valide (ne devrait pas arriver)
+        elif raison is None:
+            return None  # en fait valide (ne devrait pas arriver)
+
+        if meilleure_raison is None:
+            meilleure_raison = raison
+
+    if meilleure_raison is None and len(couleurs_vues) > 1:
+        exemples = " et ".join(sorted(couleurs_vues))
+        return f"toutes les cartes réelles d'une suite doivent être de la même couleur (tu mélanges {exemples})."
+
+    return meilleure_raison or "cette suite ne respecte pas les règles (couleur, ordre des valeurs, ou trop de jokers)."
+
+
+def diagnostiquer_groupe(cartes, type_voulu, taille_voulue):
+    if type_voulu == "brelan":
+        return diagnostiquer_brelan(cartes, taille_voulue)
+    return diagnostiquer_suite(cartes, taille_voulue)
+
+
+def diagnostiquer_etalement(niveau_actuel, groupes_proposes):
+    """AJOUT : explique pourquoi un étalement proposé ne correspond pas au
+    contrat demandé. Diagnostique chaque groupe À SA POSITION EXACTE (le
+    "Groupe 1" affiché à l'écran correspond toujours au 1er composant du
+    contrat, etc. — l'interface étiquette déjà chaque zone en conséquence),
+    donc le message pointe directement vers ce que le joueur voit."""
+    contrat = CONTRATS.get(niveau_actuel)
+    if not contrat:
+        return "Contrat inconnu."
+
+    if len(groupes_proposes) != len(contrat):
+        return (
+            f"Ce contrat demande {len(contrat)} groupe(s) ({DESCRIPTIONS_CONTRATS.get(niveau_actuel, '')}), "
+            f"tu en as proposé {len(groupes_proposes)}."
+        )
+
+    messages = []
+    for i in range(len(contrat)):
+        type_voulu, taille_voulue = contrat[i]
+        raison = diagnostiquer_groupe(groupes_proposes[i], type_voulu, taille_voulue)
+        if raison:
+            nom_type = "suite" if type_voulu == "suite" else "brelan"
+            messages.append(f"Groupe {i + 1} ({nom_type} attendu) : {raison}")
+
+    return " ".join(messages) if messages else None
+
+
+def _groupe_est_brelan(groupe):
+    # AJOUT : même définition que estGroupeBrelan() côté app.js — basée sur
+    # les cartes SANS AMBIGUÏTÉ (ni Joker, ni "2"), pour rester cohérent avec
+    # l'affichage.
+    sans_ambiguite = [c for c in groupe if c.valeur not in (0, 2)]
+    return len(sans_ambiguite) >= 2 and all(c.valeur == sans_ambiguite[0].valeur for c in sans_ambiguite)
+
+
+def diagnostiquer_rajout_carte_reelle(groupe_cible, carte):
+    """Explique pourquoi une carte RÉELLE (ni Joker, ni "2") ne peut
+    rejoindre `groupe_cible` déjà posé sur la table — qu'elle ait été
+    essayée en 'debut' ou en 'fin' (les deux ont déjà échoué à ce stade)."""
+    if _groupe_est_brelan(groupe_cible):
+        normales = [c for c in groupe_cible if c.valeur not in (0, 2)]
+        if normales and carte.valeur != normales[0].valeur:
+            return f"Ce groupe est un brelan de {_nom_valeur_conceptuelle(normales[0].valeur)} : {carte} ne peut pas s'y ajouter."
+        return "Il y a déjà trop de jokers dans ce brelan pour en ajouter un de plus sans qu'ils ne se touchent."
+
+    couleur_ref = next((c.couleur for c in groupe_cible if c.valeur not in (0, 2)), None)
+    if couleur_ref is not None and carte.couleur != couleur_ref:
+        return f"Cette suite est en {couleur_ref} : {carte} n'est pas de cette couleur."
+
+    valeurs = _valeurs_conceptuelles_groupe(groupe_cible)
+    if not valeurs:
+        return "Ce groupe ne contient pas assez de cartes réelles pour savoir où le prolonger."
+
+    attendu_debut = valeurs[0] - 1
+    attendu_fin = valeurs[-1] + 1
+    noms_attendus = []
+    if 1 <= attendu_debut:
+        noms_attendus.append(f"{_nom_valeur_conceptuelle(attendu_debut)} (avant la première carte)")
+    if attendu_fin <= 14:
+        noms_attendus.append(f"{_nom_valeur_conceptuelle(attendu_fin)} (après la dernière)")
+
+    if not noms_attendus:
+        return "Cette suite est déjà complète des deux côtés (rien avant l'As, rien après l'As en carte haute)."
+
+    return f"Pour prolonger cette suite, il faudrait une carte de valeur {' ou '.join(noms_attendus)} — {carte} ne convient pas."
+
+
+def diagnostiquer_rajout_joker(groupe_cible, carte, position):
+    """Explique pourquoi un Joker/"2" ne peut pas prolonger `groupe_cible` du
+    côté demandé ('debut' ou 'fin') — pour un groupe qui n'est pas un
+    brelan (un brelan ne demande pas de position, voir
+    diagnostiquer_rajout_carte_reelle pour ce cas)."""
+    carte_bord = groupe_cible[0] if position == "debut" else groupe_cible[-1]
+    if carte_bord.valeur in (0, 2):
+        return "Un joker ne peut jamais se retrouver juste à côté d'un autre joker : il y en a déjà un à cet endroit."
+
+    valeurs = _valeurs_conceptuelles_groupe(groupe_cible)
+    if not valeurs:
+        return "Ce groupe ne contient pas assez de cartes réelles pour savoir où le prolonger."
+
+    v_bord = valeurs[0] if position == "debut" else valeurs[-1]
+    v_attendue = v_bord - 1 if position == "debut" else v_bord + 1
+    if not (1 <= v_attendue <= 14):
+        cote = "avant l'As" if v_attendue < 1 else "après l'As en carte haute"
+        return f"Cette suite est déjà complète de ce côté : il n'y a rien {cote}."
+
+    return None  # ne devrait pas arriver si on appelle ça après un échec confirmé
 
 
 def verifier_contrat(niveau_actuel, groupes_proposes):
